@@ -1,0 +1,11 @@
+{
+  "name": "cmm-auto",
+  "version": "1.0.0",
+  "description": "Bybit 크립토 가격 모니터링 웹앱",
+  "scripts": {
+    "start": "npx serve . -p 3000",
+    "dev": "npx serve . -p 3000 --no-clipboard"
+  },
+  "keywords": ["bybit", "crypto", "monitoring", "chart"],
+  "license": "MIT"
+}

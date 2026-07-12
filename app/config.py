@@ -13,19 +13,36 @@ DEFAULT_CONFIG = {
     "database": "data/candles.db",
     "poll_interval_seconds": 20,
     "backfill_candles": 1500,
+    "dynamic_ttl_seconds": 900,
     "timeframes": ["1m", "5m", "15m", "1h", "4h", "1d"],
     "exchanges": {
-        "binance": {"symbols": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"]},
-        "upbit": {"symbols": ["BTC/KRW", "ETH/KRW", "XRP/KRW"]},
-        "bybit": {"symbols": ["BTC/USDT", "ETH/USDT"]},
+        "upbit": {
+            "quote": "KRW",
+            "market_type": "spot",
+            "symbols": ["BTC/KRW", "ETH/KRW", "XRP/KRW"],
+        },
+        "binance": {
+            "ccxt_id": "binanceusdm",
+            "quote": "USDT",
+            "market_type": "swap",
+            "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT"],
+        },
+        "bybit": {
+            "quote": "USDT",
+            "market_type": "swap",
+            "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+        },
     },
 }
 
 
 @dataclass
 class ExchangeConfig:
-    symbols: list[str] = field(default_factory=list)
-    options: dict = field(default_factory=dict)
+    symbols: list[str] = field(default_factory=list)  # 상시 수집하는 기본 심볼
+    options: dict = field(default_factory=dict)       # ccxt 생성자 옵션
+    ccxt_id: str | None = None                        # ccxt 거래소 id (없으면 키 그대로)
+    quote: str | None = None                          # 마켓 목록 필터: 결제 통화 (KRW, USDT …)
+    market_type: str | None = None                    # 마켓 목록 필터: spot | swap
 
 
 @dataclass
@@ -33,6 +50,7 @@ class Config:
     database: Path
     poll_interval_seconds: int
     backfill_candles: int
+    dynamic_ttl_seconds: int
     timeframes: list[str]
     exchanges: dict[str, ExchangeConfig]
 
@@ -47,6 +65,9 @@ def load_config(path: Path | None = None) -> Config:
         ex_id: ExchangeConfig(
             symbols=list(spec.get("symbols", [])),
             options=dict(spec.get("options", {})),
+            ccxt_id=spec.get("ccxt_id"),
+            quote=spec.get("quote"),
+            market_type=spec.get("market_type"),
         )
         for ex_id, spec in raw.get("exchanges", {}).items()
     }
@@ -59,6 +80,7 @@ def load_config(path: Path | None = None) -> Config:
         database=db_path,
         poll_interval_seconds=int(raw.get("poll_interval_seconds", 20)),
         backfill_candles=int(raw.get("backfill_candles", 1500)),
+        dynamic_ttl_seconds=int(raw.get("dynamic_ttl_seconds", 900)),
         timeframes=list(raw.get("timeframes", ["1m", "1h", "1d"])),
         exchanges=exchanges,
     )

@@ -80,6 +80,12 @@ async def candles(
     if exchange not in cfg.exchanges:
         raise HTTPException(404, f"설정에 없는 거래소: {exchange}")
     before_ms = before * 1000 if before is not None else None
+    collector: Collector = app.state.collector
+
+    # 요청 봉이 수집 봉이면 그대로, 아니면 리샘플 소스 봉을 온디맨드 수집 대상으로 등록
+    fetch_tf = timeframe if timeframe in cfg.timeframes else pick_source(cfg.timeframes, timeframe)
+    if fetch_tf is not None:
+        await collector.ensure_fresh(exchange, symbol, fetch_tf)
 
     # 1) 수집 대상 봉이면 저장된 캔들을 그대로 반환
     rows: list[dict] = []
@@ -105,18 +111,42 @@ async def candles(
     return {"exchange": exchange, "symbol": symbol, "timeframe": timeframe, "candles": rows}
 
 
+def _market_matches(ex_cfg, market: dict) -> bool:
+    """config의 quote/market_type 필터에 맞는 마켓인지 (활성 마켓만)."""
+    if market.get("active") is False:
+        return False
+    if ex_cfg.quote and market.get("quote") != ex_cfg.quote:
+        return False
+    if ex_cfg.market_type == "spot" and not market.get("spot"):
+        return False
+    if ex_cfg.market_type == "swap":
+        if not market.get("swap"):
+            return False
+        if market.get("linear") is False:  # USDT 무기한 = linear만
+            return False
+    return True
+
+
 @app.get("/api/markets")
 async def markets(exchange: str):
-    """해당 거래소에서 거래 가능한 전체 심볼 목록 (config에 추가할 때 참고용)."""
+    """거래 가능한 전체 심볼 목록 (config의 quote/market_type 필터 적용).
+    거래소 조회가 실패하면 저장된 캔들·기본 심볼로 대체(오프라인 모드)."""
+    cfg = app.state.cfg
     collector: Collector = app.state.collector
     ex = collector.exchanges.get(exchange)
-    if ex is None:
+    ex_cfg = cfg.exchanges.get(exchange)
+    if ex is None or ex_cfg is None:
         raise HTTPException(404, f"활성화되지 않은 거래소: {exchange}")
     try:
         await ex.load_markets()
+        symbols = [s for s, m in ex.markets.items() if _market_matches(ex_cfg, m)]
+        source = "exchange"
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"마켓 조회 실패: {e}") from e
-    return {"exchange": exchange, "symbols": sorted(ex.markets.keys())}
+        seen = set(await app.state.db.distinct_symbols(exchange)) | set(ex_cfg.symbols)
+        symbols = list(seen)
+        source = "offline"
+        logging.getLogger("api").warning("[%s] 마켓 조회 실패, 저장분으로 대체: %s", exchange, e)
+    return {"exchange": exchange, "symbols": sorted(symbols), "source": source}
 
 
 # ----- 차트 레이아웃 프리셋 (트레이딩뷰의 '차트 레이아웃 저장'에 해당) -----

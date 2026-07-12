@@ -4,7 +4,12 @@
 로컬 SQLite에 쌓고, 브라우저에서 **트레이딩뷰 스타일 차트**(lightweight-charts)로
 보여주는 프로그램입니다.
 
-- 거래소: [ccxt](https://github.com/ccxt/ccxt) 기반 — 바이낸스, 업비트, 바이비트 등 **100개 이상** 지원
+- 거래소: [ccxt](https://github.com/ccxt/ccxt) 기반 — 기본 구성은 **업비트 KRW 마켓(전체)**,
+  **바이낸스 USDT 무기한 선물(전체)**, **바이비트 USDT 무기한 선물(전체)**. 다른 거래소도
+  config로 추가 가능 (100개 이상 지원)
+- 심볼 선택: 드롭다운 대신 **검색**(부분 일치) + **즐겨찾기(★)** — 즐겨찾기는 목록 맨 위에
+  고정되고 브라우저에 저장됨. 검색으로 고른 심볼은 서버가 **온디맨드로 수집을 시작**하고,
+  보고 있는 동안 계속 갱신하다가 안 보면(기본 15분) 자동으로 수집을 멈춤
 - 타임프레임: `1m` `5m` `15m` `1h` `4h` `1d` 수집(설정으로 변경 가능) + **주봉(1w)·월봉(1M)**,
   그리고 봉 그룹의 `+` 버튼으로 **사용자 지정 봉**(예: 3분, 45분, 2시간, 2주) 입력 —
   수집 봉이 아닌 것은 서버가 저장된 캔들에서 자동 리샘플링(집계)해서 표시
@@ -52,10 +57,13 @@ Windows에서는 `run.bat`을 더블클릭하면 의존성 설치와 서버 실�
   "database": "data/candles.db",
   "poll_interval_seconds": 20,
   "backfill_candles": 1500,
+  "dynamic_ttl_seconds": 900,
   "timeframes": ["1m", "5m", "15m", "1h", "4h", "1d"],
   "exchanges": {
-    "binance": { "symbols": ["BTC/USDT", "ETH/USDT"] },
-    "upbit":   { "symbols": ["BTC/KRW"] }
+    "upbit":   { "quote": "KRW",  "market_type": "spot", "symbols": ["BTC/KRW"] },
+    "binance": { "ccxt_id": "binanceusdm", "quote": "USDT", "market_type": "swap",
+                 "symbols": ["BTC/USDT:USDT"] },
+    "bybit":   { "quote": "USDT", "market_type": "swap", "symbols": ["BTC/USDT:USDT"] }
   }
 }
 ```
@@ -63,9 +71,14 @@ Windows에서는 `run.bat`을 더블클릭하면 의존성 설치와 서버 실�
 | 항목 | 설명 |
 |---|---|
 | `poll_interval_seconds` | 심볼 전체를 한 바퀴 수집한 뒤 쉬는 시간(초) |
-| `backfill_candles` | 최초 실행 시 채울 과거 캔들 개수 |
+| `backfill_candles` | 최초 수집 시 채울 과거 캔들 개수 |
+| `dynamic_ttl_seconds` | 검색으로 열어본 심볼을 마지막 조회 후 계속 수집해 주는 시간(초) |
 | `timeframes` | 수집할 봉 종류. 거래소가 지원하지 않는 봉은 자동으로 건너뜀 |
-| `exchanges` | ccxt 거래소 id → 심볼 목록. id는 ccxt 문서 참고 (`binance`, `upbit`, `bybit`, `okx`, `coinbase`, …) |
+| `exchanges.symbols` | **상시** 수집할 기본 심볼 (그 외 심볼은 차트에서 여는 순간 온디맨드 수집) |
+| `exchanges.quote` / `market_type` | 심볼 검색 목록 필터 — 예: KRW 현물(`spot`), USDT 무기한(`swap`) |
+| `exchanges.ccxt_id` | 실제 ccxt 거래소 id (바이낸스 선물은 `binanceusdm`) |
+
+선물 심볼은 ccxt 표기(`BTC/USDT:USDT` = USDT 무기한)를 그대로 사용합니다.
 
 거래소별 API 키가 필요 없는 **공개 시세 API**만 사용하므로 키 설정 없이 동작합니다.
 특정 거래소에서 어떤 심볼을 쓸 수 있는지는 서버 실행 후

@@ -107,6 +107,13 @@ class Database:
             row = await cur.fetchone()
         return row[0] if row else 0
 
+    async def distinct_symbols(self, exchange: str) -> list[str]:
+        async with self.conn.execute(
+            "SELECT DISTINCT symbol FROM candles WHERE exchange=?", (exchange,)
+        ) as cur:
+            rows = await cur.fetchall()
+        return [r[0] for r in rows]
+
     # ----- 차트 레이아웃 프리셋 -----
 
     async def save_layout(self, name: str, data_json: str) -> None:

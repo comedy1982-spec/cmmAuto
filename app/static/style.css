@@ -310,6 +310,48 @@ select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* 사용자 지정 봉 팝오버 */
 .tf-custom-panel { width: 230px; }
 
+/* ---------- 심볼 검색 + 즐겨찾기 ---------- */
+
+.sym-btn { font-weight: 600; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sym-panel { width: 280px; padding: 8px; }
+.sym-search {
+  width: 100%;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 9px;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.sym-search:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sym-list { max-height: 46vh; overflow-y: auto; }
+.sym-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.sym-row:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.sym-row.current .sym-name { color: var(--accent); font-weight: 600; }
+.sym-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sym-star {
+  background: none;
+  border: none;
+  color: var(--border);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 2px;
+  flex: none;
+  line-height: 1;
+}
+.sym-star:hover { color: var(--text-muted); }
+.sym-star.on { color: #f0b90b; }
+.sym-empty { color: var(--text-muted); font-size: 12.5px; padding: 8px 6px; }
+
 /* ---------- 그리기 도구 ---------- */
 
 .draw-overlay {

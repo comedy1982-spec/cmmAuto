@@ -35,6 +35,47 @@ const TF_UNITS = [
 
 let meta = null; // /api/meta 응답 (전 패널 공유)
 
+/* ---------- 심볼 즐겨찾기 + 마켓 목록 캐시 (전 패널 공유) ---------- */
+
+const FAV_KEY = "cmmauto.favorites.v1";
+
+function loadFavorites() {
+  try {
+    const v = JSON.parse(localStorage.getItem(FAV_KEY));
+    return new Set(Array.isArray(v) ? v : []);
+  } catch {
+    return new Set();
+  }
+}
+
+const favorites = loadFavorites(); // "거래소|심볼" 문자열 집합
+
+function toggleFavorite(exchange, symbol) {
+  const key = `${exchange}|${symbol}`;
+  if (favorites.has(key)) favorites.delete(key);
+  else favorites.add(key);
+  localStorage.setItem(FAV_KEY, JSON.stringify([...favorites]));
+}
+
+function isFavorite(exchange, symbol) {
+  return favorites.has(`${exchange}|${symbol}`);
+}
+
+const marketsCache = new Map(); // exchange → Promise<string[]>
+
+function getMarkets(exchange) {
+  if (!marketsCache.has(exchange)) {
+    const p = api(`/api/markets?exchange=${encodeURIComponent(exchange)}`)
+      .then((r) => r.symbols)
+      .catch(() => {
+        marketsCache.delete(exchange); // 실패 시 다음에 재시도
+        return meta?.exchanges?.[exchange]?.symbols ?? [];
+      });
+    marketsCache.set(exchange, p);
+  }
+  return marketsCache.get(exchange);
+}
+
 /* ---------- 공용 유틸 ---------- */
 
 async function api(path) {
@@ -242,7 +283,13 @@ class ChartPanel {
     this.root.innerHTML = `
       <header class="panel-bar">
         <select class="sel-exchange" aria-label="거래소"></select>
-        <select class="sel-symbol" aria-label="심볼"></select>
+        <div class="field indicator-field sym-field">
+          <button type="button" class="indicator-btn sym-btn" aria-label="심볼 선택">–</button>
+          <div class="indicator-panel sym-panel" hidden>
+            <input type="text" class="sym-search" placeholder="심볼 검색 (예: btc, doge)" autocomplete="off" />
+            <div class="sym-list"></div>
+          </div>
+        </div>
         <div class="field indicator-field tf-field">
           <div class="segmented tf-group" role="group" aria-label="타임프레임"></div>
           <div class="indicator-panel tf-custom-panel" hidden>
@@ -256,7 +303,7 @@ class ChartPanel {
           </div>
         </div>
         <div class="field indicator-field">
-          <button type="button" class="indicator-btn" aria-expanded="false">지표 ▾</button>
+          <button type="button" class="indicator-btn ind-btn" aria-expanded="false">지표 ▾</button>
           <div class="indicator-panel ind-popover" hidden></div>
         </div>
         <div class="segmented draw-group" role="group" aria-label="그리기 도구">
@@ -288,14 +335,17 @@ class ChartPanel {
     const $ = (cls) => this.root.querySelector("." + cls);
     this.els = {
       exchange: $("sel-exchange"),
-      symbol: $("sel-symbol"),
+      symBtn: $("sym-btn"),
+      symPanel: $("sym-panel"),
+      symSearch: $("sym-search"),
+      symList: $("sym-list"),
       tfGroup: $("tf-group"),
       tfCustomPanel: $("tf-custom-panel"),
       tfCustomN: $("tf-custom-n"),
       tfCustomUnit: $("tf-custom-unit"),
       tfCustomApply: $("tf-custom-apply"),
       tfCustomMsg: $("tf-custom-msg"),
-      indBtn: $("indicator-btn"),
+      indBtn: $("ind-btn"),
       indPanel: $("ind-popover"),
       price: $("panel-price"),
       last: $("last"),
@@ -314,16 +364,36 @@ class ChartPanel {
 
     this.els.exchange.addEventListener("change", () => {
       this.sel.exchange = this.els.exchange.value;
-      this.sel.symbol = this.exchangeMeta()?.symbols?.[0] ?? null;
+      // 새 거래소의 기본 심볼: 즐겨찾기 → 기본 수집 심볼 순
+      const fav = [...favorites].find((k) => k.startsWith(this.sel.exchange + "|"));
+      this.sel.symbol = fav ? fav.split("|")[1] : this.exchangeMeta()?.symbols?.[0] ?? null;
       this.sel.timeframe = this.firstSupportedTimeframe();
       this.renderToolbar();
       saveLayout();
       this.loadInitial();
     });
-    this.els.symbol.addEventListener("change", () => {
-      this.sel.symbol = this.els.symbol.value;
-      saveLayout();
-      this.loadInitial();
+
+    // 심볼 검색 팝오버
+    this.els.symBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = this.els.symPanel.hidden;
+      closeAllIndicatorPopovers();
+      closeLayoutPopover();
+      if (open) {
+        this.els.symPanel.hidden = false;
+        this.els.symBtn.classList.add("open");
+        this.els.symSearch.value = "";
+        this.renderSymbolList("");
+        this.els.symSearch.focus();
+      }
+    });
+    this.els.symPanel.addEventListener("click", (e) => e.stopPropagation());
+    this.els.symSearch.addEventListener("input", () => this.renderSymbolList(this.els.symSearch.value));
+    this.els.symSearch.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        const first = this.els.symList.querySelector(".sym-row");
+        if (first) first.click();
+      }
     });
 
     this.els.indBtn.addEventListener("click", (e) => {
@@ -367,6 +437,68 @@ class ChartPanel {
     this.els.indBtn.classList.remove("open");
     this.els.indBtn.setAttribute("aria-expanded", "false");
     this.els.tfCustomPanel.hidden = true;
+    this.els.symPanel.hidden = true;
+    this.els.symBtn.classList.remove("open");
+  }
+
+  /** 검색어에 맞는 심볼 목록 렌더 (즐겨찾기 우선, ★ 토글 포함) */
+  async renderSymbolList(query) {
+    const exchange = this.sel.exchange;
+    const all = await getMarkets(exchange);
+    if (this.destroyed || this.els.symPanel.hidden || exchange !== this.sel.exchange) return;
+
+    const q = query.trim().toLowerCase();
+    const match = (s) => !q || s.toLowerCase().includes(q);
+    const favs = all.filter((s) => isFavorite(exchange, s) && match(s));
+    const rest = all.filter((s) => !isFavorite(exchange, s) && match(s));
+    const MAX_ROWS = 300;
+    const shown = [...favs, ...rest].slice(0, MAX_ROWS);
+
+    this.els.symList.innerHTML = "";
+    if (shown.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "sym-empty";
+      empty.textContent = "일치하는 심볼이 없습니다";
+      this.els.symList.appendChild(empty);
+      return;
+    }
+    for (const sym of shown) {
+      const row = document.createElement("div");
+      row.className = "sym-row";
+      row.classList.toggle("current", sym === this.sel.symbol);
+
+      const star = document.createElement("button");
+      star.type = "button";
+      star.className = "sym-star" + (isFavorite(exchange, sym) ? " on" : "");
+      star.textContent = "★";
+      star.title = "즐겨찾기";
+      star.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleFavorite(exchange, sym);
+        this.renderSymbolList(this.els.symSearch.value);
+      });
+      row.appendChild(star);
+
+      const name = document.createElement("span");
+      name.className = "sym-name";
+      name.textContent = sym;
+      row.appendChild(name);
+
+      row.addEventListener("click", () => {
+        this.sel.symbol = sym;
+        this.closeIndicatorPopover();
+        this.renderToolbar();
+        saveLayout();
+        this.loadInitial();
+      });
+      this.els.symList.appendChild(row);
+    }
+    if (favs.length + rest.length > MAX_ROWS) {
+      const more = document.createElement("div");
+      more.className = "sym-empty";
+      more.textContent = `${favs.length + rest.length - MAX_ROWS}개 더 있음 — 검색어를 입력하세요`;
+      this.els.symList.appendChild(more);
+    }
   }
 
   createCharts() {
@@ -500,24 +632,18 @@ class ChartPanel {
   }
 
   renderToolbar() {
-    const { exchange, symbol } = this.els;
+    const { exchange } = this.els;
     exchange.innerHTML = "";
-    for (const exId of Object.keys(meta.exchanges)) {
+    for (const [exId, ex] of Object.entries(meta.exchanges)) {
       const opt = document.createElement("option");
       opt.value = exId;
-      opt.textContent = exId;
+      const badge = ex.status?.market_type === "swap" ? " 선물" : ex.status?.quote === "KRW" ? " KRW" : "";
+      opt.textContent = exId + badge;
       exchange.appendChild(opt);
     }
     exchange.value = this.sel.exchange;
 
-    symbol.innerHTML = "";
-    for (const sym of this.exchangeMeta()?.symbols ?? []) {
-      const opt = document.createElement("option");
-      opt.value = sym;
-      opt.textContent = sym;
-      symbol.appendChild(opt);
-    }
-    symbol.value = this.sel.symbol;
+    this.els.symBtn.textContent = `${this.sel.symbol ?? "–"} ▾`;
 
     this.renderTimeframes();
   }
@@ -1049,7 +1175,8 @@ function validSelection(sel) {
   const exMeta = meta.exchanges[sel.exchange];
   return {
     exchange: sel.exchange,
-    symbol: exMeta.symbols.includes(sel.symbol) ? sel.symbol : exMeta.symbols[0],
+    // 검색으로 고른 심볼은 기본 수집 목록 밖일 수 있으므로 문자열이면 그대로 유지
+    symbol: typeof sel.symbol === "string" && sel.symbol ? sel.symbol : exMeta.symbols[0],
     // 사용자 지정 봉(예: 2h, 45m)도 서버 리샘플링으로 표시 가능하므로 형식만 검증
     timeframe: TF_RE.test(sel.timeframe ?? "") ? sel.timeframe : meta.timeframes[0],
     indicators: sel.indicators ?? null,

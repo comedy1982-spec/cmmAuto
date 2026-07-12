@@ -1,11 +1,25 @@
-"""config.json 로더."""
+"""config.json 로더. 파일이 없으면 기본값으로 새로 만든다 (exe 단독 배포 지원)."""
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from .paths import BASE_DIR
+
+ROOT = BASE_DIR
+
+DEFAULT_CONFIG = {
+    "database": "data/candles.db",
+    "poll_interval_seconds": 20,
+    "backfill_candles": 1500,
+    "timeframes": ["1m", "5m", "15m", "1h", "4h", "1d"],
+    "exchanges": {
+        "binance": {"symbols": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"]},
+        "upbit": {"symbols": ["BTC/KRW", "ETH/KRW", "XRP/KRW"]},
+        "bybit": {"symbols": ["BTC/USDT", "ETH/USDT"]},
+    },
+}
 
 
 @dataclass
@@ -25,6 +39,8 @@ class Config:
 
 def load_config(path: Path | None = None) -> Config:
     path = path or ROOT / "config.json"
+    if not path.exists():
+        path.write_text(json.dumps(DEFAULT_CONFIG, ensure_ascii=False, indent=2), encoding="utf-8")
     raw = json.loads(path.read_text(encoding="utf-8"))
 
     exchanges = {

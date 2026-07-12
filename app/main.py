@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -13,10 +12,11 @@ from fastapi.staticfiles import StaticFiles
 from .collector import Collector
 from .config import load_config
 from .db import Database
+from .paths import BUNDLE_DIR
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
-STATIC_DIR = Path(__file__).parent / "static"
+STATIC_DIR = BUNDLE_DIR / "app" / "static"
 
 
 @asynccontextmanager

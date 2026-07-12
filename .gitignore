@@ -4,3 +4,6 @@ data/
 .venv/
 venv/
 node_modules/
+build/
+dist/
+*.spec.bak

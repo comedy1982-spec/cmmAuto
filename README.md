@@ -51,6 +51,28 @@ python run.py --port 9000
 특정 거래소에서 어떤 심볼을 쓸 수 있는지는 서버 실행 후
 `http://127.0.0.1:8000/api/markets?exchange=binance` 로 확인할 수 있습니다.
 
+## Windows용 exe 만들기
+
+Python 설치 없이 더블클릭으로 실행할 수 있는 `cmmAuto.exe`를 직접 빌드할 수 있습니다.
+PyInstaller는 빌드하는 OS용 실행 파일만 만들 수 있으므로, **반드시 Windows PC에서** 아래를
+실행해야 합니다.
+
+```bat
+build.bat
+```
+
+완료되면 `dist\cmmAuto.exe` 가 생성됩니다. 이 파일 하나만 원하는 폴더로 복사해서 실행하면 되고,
+그 폴더에 `config.json`과 `data\` 가 없으면 최초 실행 시 자동으로 만들어집니다(기본 설정으로 동작).
+실행하면 기본 브라우저가 자동으로 열립니다. `cmmAuto.exe --no-browser`로 자동 열기를 끌 수 있고,
+`cmmAuto.exe --port 9000` 처럼 포트도 바꿀 수 있습니다.
+
+`build.bat`이 내부적으로 하는 일:
+
+```bat
+pip install -r requirements.txt -r requirements-build.txt
+pyinstaller cmmauto.spec
+```
+
 ## API
 
 | 엔드포인트 | 설명 |
@@ -64,10 +86,14 @@ python run.py --port 9000
 ```
 ├── run.py               # 실행 진입점 (uvicorn)
 ├── config.json          # 거래소/심볼/주기 설정
+├── cmmauto.spec         # PyInstaller 빌드 스펙
+├── build.bat            # Windows exe 빌드 스크립트
+├── requirements-build.txt  # 빌드 전용 의존성 (pyinstaller)
 ├── app/
-│   ├── config.py        # 설정 로더
-│   ├── db.py            # SQLite 캔들 저장소
-│   ├── collector.py     # ccxt 수집기 (백필 + 증분 폴링)
-│   ├── main.py          # FastAPI 서버 + REST API
-│   └── static/          # 프론트엔드 (lightweight-charts, 오프라인 번들 포함)
+│   ├── paths.py          # 일반 실행 / exe 실행 경로 분기
+│   ├── config.py         # 설정 로더 (없으면 기본값으로 자동 생성)
+│   ├── db.py             # SQLite 캔들 저장소
+│   ├── collector.py      # ccxt 수집기 (백필 + 증분 폴링)
+│   ├── main.py           # FastAPI 서버 + REST API
+│   └── static/           # 프론트엔드 (lightweight-charts, 오프라인 번들 포함)
 ```

@@ -21,7 +21,10 @@ python run.py            # 기본: http://127.0.0.1:8000
 python run.py --port 9000
 ```
 
-브라우저에서 <http://127.0.0.1:8000> 을 열면 됩니다.
+Windows에서는 `run.bat`을 더블클릭하면 의존성 설치와 서버 실행을 한 번에 해 줍니다
+(인자도 그대로 전달됩니다: `run.bat --port 9000`).
+
+브라우저에서 <http://127.0.0.1:8000> 이 자동으로 열립니다 (`--no-browser`로 끌 수 있음).
 서버가 뜨는 순간부터 백그라운드 수집기가 돌기 시작하고, 최초 실행 시에는
 심볼·타임프레임당 과거 1,500개 캔들을 채웁니다(수 분 소요될 수 있음).
 
@@ -85,6 +88,7 @@ pyinstaller cmmauto.spec
 
 ```
 ├── run.py               # 실행 진입점 (uvicorn)
+├── run.bat              # Windows에서 소스로 바로 실행 (의존성 설치 + 서버 실행)
 ├── config.json          # 거래소/심볼/주기 설정
 ├── cmmauto.spec         # PyInstaller 빌드 스펙
 ├── build.bat            # Windows exe 빌드 스크립트

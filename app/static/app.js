@@ -807,12 +807,27 @@ function defaultSelection(i) {
   };
 }
 
-function saveLayout() {
-  localStorage.setItem(LAYOUT_KEY, JSON.stringify({
+function currentLayoutState() {
+  return {
     layout: layoutCount,
     splits,
     panels: panels.map((p) => ({ ...p.sel, indicators: p.settings })),
-  }));
+  };
+}
+
+function saveLayout() {
+  localStorage.setItem(LAYOUT_KEY, JSON.stringify(currentLayoutState()));
+}
+
+/** 저장된 프리셋을 화면에 적용한다 (전 패널 재구성) */
+function applyLayoutState(state) {
+  while (panels.length) panels.pop().destroy();
+  splits = {
+    col: state?.splits?.col ?? 0.5,
+    row: state?.splits?.row ?? 0.5,
+  };
+  const n = Math.min(MAX_PANELS, Math.max(1, state?.layout ?? 1));
+  setLayout(n, state?.panels ?? []);
 }
 
 function loadLayoutPref() {
@@ -953,6 +968,150 @@ document.getElementById("layout-group").addEventListener("click", (e) => {
   if (!btn) return;
   setLayout(Number(btn.dataset.layout));
 });
+
+/* ---------- 레이아웃 프리셋 저장/불러오기 (서버 DB에 저장) ---------- */
+
+const layBtn = document.getElementById("layoutmgr-btn");
+const layPanel = document.getElementById("layoutmgr-panel");
+
+function closeLayoutPopover() {
+  layPanel.hidden = true;
+  layBtn.classList.remove("open");
+  layBtn.setAttribute("aria-expanded", "false");
+}
+
+function layMessage(text, isError = false) {
+  const msg = layPanel.querySelector(".lay-msg");
+  if (msg) {
+    msg.textContent = text;
+    msg.className = `lay-msg${isError ? " err" : ""}`;
+  }
+}
+
+async function buildLayoutPopover() {
+  layPanel.innerHTML = "";
+
+  const listSection = document.createElement("div");
+  listSection.className = "ind-section";
+  listSection.innerHTML = `<div class="ind-title">저장된 레이아웃</div>`;
+
+  let layouts = [];
+  try {
+    layouts = (await api("/api/layouts")).layouts;
+  } catch {
+    listSection.innerHTML += `<div class="lay-empty">목록을 불러오지 못했습니다</div>`;
+  }
+
+  if (layouts.length === 0 && !listSection.querySelector(".lay-empty")) {
+    listSection.innerHTML += `<div class="lay-empty">저장된 레이아웃이 없습니다</div>`;
+  }
+
+  const dateFmt = new Intl.DateTimeFormat("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  for (const item of layouts) {
+    const row = document.createElement("div");
+    row.className = "lay-row";
+
+    const nameBtn = document.createElement("button");
+    nameBtn.type = "button";
+    nameBtn.className = "lay-name";
+    nameBtn.textContent = item.name;
+    nameBtn.title = `"${item.name}" 불러오기`;
+    nameBtn.addEventListener("click", async () => {
+      try {
+        const res = await api(`/api/layouts/${encodeURIComponent(item.name)}`);
+        applyLayoutState(res.data);
+        closeLayoutPopover();
+      } catch (e) {
+        layMessage(`불러오기 실패: ${e.message}`, true);
+      }
+    });
+    row.appendChild(nameBtn);
+
+    const date = document.createElement("span");
+    date.className = "lay-date";
+    date.textContent = dateFmt.format(new Date(item.updated_at * 1000));
+    row.appendChild(date);
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "lay-del";
+    del.textContent = "✕";
+    del.title = `"${item.name}" 삭제`;
+    del.addEventListener("click", async () => {
+      if (!confirm(`레이아웃 "${item.name}"을(를) 삭제할까요?`)) return;
+      try {
+        await fetch(`/api/layouts/${encodeURIComponent(item.name)}`, { method: "DELETE" });
+        buildLayoutPopover();
+      } catch (e) {
+        layMessage(`삭제 실패: ${e.message}`, true);
+      }
+    });
+    row.appendChild(del);
+
+    listSection.appendChild(row);
+  }
+  layPanel.appendChild(listSection);
+
+  const saveSection = document.createElement("div");
+  saveSection.className = "ind-section";
+  saveSection.innerHTML = `<div class="ind-title">현재 화면 저장</div>`;
+  const saveRow = document.createElement("div");
+  saveRow.className = "lay-save-row";
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.placeholder = "레이아웃 이름";
+  nameInput.maxLength = 60;
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "lay-save-btn";
+  saveBtn.textContent = "저장";
+  const doSave = async () => {
+    const name = nameInput.value.trim();
+    if (!name) {
+      layMessage("이름을 입력해 주세요", true);
+      nameInput.focus();
+      return;
+    }
+    const exists = layouts.some((l) => l.name === name);
+    if (exists && !confirm(`"${name}"이(가) 이미 있습니다. 덮어쓸까요?`)) return;
+    try {
+      const res = await fetch(`/api/layouts/${encodeURIComponent(name)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(currentLayoutState()),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await buildLayoutPopover();
+      layMessage(`"${name}" 저장됨`);
+    } catch (e) {
+      layMessage(`저장 실패: ${e.message}`, true);
+    }
+  };
+  saveBtn.addEventListener("click", doSave);
+  nameInput.addEventListener("keydown", (e) => { if (e.key === "Enter") doSave(); });
+  saveRow.appendChild(nameInput);
+  saveRow.appendChild(saveBtn);
+  saveSection.appendChild(saveRow);
+  const msg = document.createElement("div");
+  msg.className = "lay-msg";
+  saveSection.appendChild(msg);
+  layPanel.appendChild(saveSection);
+}
+
+layBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const open = layPanel.hidden;
+  closeAllIndicatorPopovers();
+  closeLayoutPopover();
+  if (open) {
+    layPanel.hidden = false;
+    layBtn.classList.add("open");
+    layBtn.setAttribute("aria-expanded", "true");
+    buildLayoutPopover();
+  }
+});
+layPanel.addEventListener("click", (e) => e.stopPropagation());
+document.addEventListener("click", () => closeLayoutPopover());
 
 /* ---------- 수집기 상태 표시 ---------- */
 

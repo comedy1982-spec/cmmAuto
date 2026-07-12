@@ -14,6 +14,9 @@
 - 멀티 차트: 툴바의 **분할** 버튼으로 화면을 1·2·3·4개 구획으로 나눠 서로 다른
   거래소/심볼/봉을 동시에 표시하고, **구획 경계선을 드래그해 크기 조절**
   (트레이딩뷰 스타일). 분할 상태·크기·구획별 선택/지표는 브라우저에 저장되어 유지됨
+- 레이아웃 프리셋: 툴바의 **레이아웃** 버튼으로 현재 화면 구성(분할·크기·구획별
+  심볼/봉/지표)을 이름 붙여 저장하고 언제든 불러오기/삭제 — 서버 DB에 저장되므로
+  다른 브라우저에서 열어도 유지됨
 
 ## 실행 방법
 
@@ -88,6 +91,7 @@ pyinstaller cmmauto.spec
 | `GET /api/meta` | 거래소·심볼·타임프레임 목록 + 수집기 상태 |
 | `GET /api/candles?exchange=binance&symbol=BTC/USDT&timeframe=1h&limit=500&before=<unix초>` | 캔들 조회(오름차순). `before`로 과거 페이지네이션 |
 | `GET /api/markets?exchange=binance` | 해당 거래소의 전체 거래 가능 심볼 |
+| `GET /api/layouts` · `GET/PUT/DELETE /api/layouts/{이름}` | 차트 레이아웃 프리셋 목록/조회/저장/삭제 |
 
 ## 구조
 

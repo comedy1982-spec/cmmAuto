@@ -1,11 +1,12 @@
 """FastAPI 서버: 수집기 구동 + 캔들 REST API + 정적 프론트엔드."""
 from __future__ import annotations
 
+import json
 import logging
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -97,6 +98,50 @@ async def markets(exchange: str):
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"마켓 조회 실패: {e}") from e
     return {"exchange": exchange, "symbols": sorted(ex.markets.keys())}
+
+
+# ----- 차트 레이아웃 프리셋 (트레이딩뷰의 '차트 레이아웃 저장'에 해당) -----
+
+MAX_LAYOUT_NAME = 60
+MAX_LAYOUT_BYTES = 64 * 1024
+
+
+def _check_layout_name(name: str) -> str:
+    name = name.strip()
+    if not name or len(name) > MAX_LAYOUT_NAME:
+        raise HTTPException(400, f"레이아웃 이름은 1~{MAX_LAYOUT_NAME}자여야 합니다")
+    return name
+
+
+@app.get("/api/layouts")
+async def list_layouts():
+    return {"layouts": await app.state.db.list_layouts()}
+
+
+@app.get("/api/layouts/{name}")
+async def get_layout(name: str):
+    data = await app.state.db.get_layout(_check_layout_name(name))
+    if data is None:
+        raise HTTPException(404, f"저장된 레이아웃 없음: {name}")
+    return {"name": name, "data": json.loads(data)}
+
+
+@app.put("/api/layouts/{name}")
+async def save_layout(name: str, data: dict = Body(...)):
+    name = _check_layout_name(name)
+    payload = json.dumps(data, ensure_ascii=False)
+    if len(payload.encode()) > MAX_LAYOUT_BYTES:
+        raise HTTPException(413, "레이아웃 데이터가 너무 큽니다")
+    await app.state.db.save_layout(name, payload)
+    return {"ok": True, "name": name}
+
+
+@app.delete("/api/layouts/{name}")
+async def delete_layout(name: str):
+    deleted = await app.state.db.delete_layout(_check_layout_name(name))
+    if not deleted:
+        raise HTTPException(404, f"저장된 레이아웃 없음: {name}")
+    return {"ok": True}
 
 
 @app.get("/")

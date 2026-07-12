@@ -18,6 +18,12 @@ CREATE TABLE IF NOT EXISTS candles (
     volume    REAL    NOT NULL,
     PRIMARY KEY (exchange, symbol, timeframe, ts)
 );
+
+CREATE TABLE IF NOT EXISTS layouts (
+    name       TEXT PRIMARY KEY,
+    data       TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 """
 
 
@@ -100,3 +106,29 @@ class Database:
         ) as cur:
             row = await cur.fetchone()
         return row[0] if row else 0
+
+    # ----- 차트 레이아웃 프리셋 -----
+
+    async def save_layout(self, name: str, data_json: str) -> None:
+        await self.conn.execute(
+            "INSERT OR REPLACE INTO layouts (name, data, updated_at) VALUES (?, ?, strftime('%s','now'))",
+            (name, data_json),
+        )
+        await self.conn.commit()
+
+    async def list_layouts(self) -> list[dict]:
+        async with self.conn.execute(
+            "SELECT name, updated_at FROM layouts ORDER BY updated_at DESC"
+        ) as cur:
+            rows = await cur.fetchall()
+        return [{"name": r[0], "updated_at": r[1]} for r in rows]
+
+    async def get_layout(self, name: str) -> str | None:
+        async with self.conn.execute("SELECT data FROM layouts WHERE name=?", (name,)) as cur:
+            row = await cur.fetchone()
+        return row[0] if row else None
+
+    async def delete_layout(self, name: str) -> bool:
+        cur = await self.conn.execute("DELETE FROM layouts WHERE name=?", (name,))
+        await self.conn.commit()
+        return cur.rowcount > 0

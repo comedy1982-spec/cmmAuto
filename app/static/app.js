@@ -159,6 +159,8 @@ class ChartPanel {
     this.sel = { exchange: sel.exchange, symbol: sel.symbol, timeframe: sel.timeframe };
     // 패널별 지표 설정: 저장값 → 구버전 전역 설정 → 기본값 순으로 복원
     this.settings = mergeIndicatorSettings(sel.indicators ?? legacyGlobalSettings());
+    // 그리기 도형: "거래소|심볼" 키로 보관 (심볼을 바꿔도 각자 유지)
+    this.drawingsByKey = sel.drawings && typeof sel.drawings === "object" ? sel.drawings : {};
     this.bars = [];
     this.loadingOlder = false;
     this.hasMoreHistory = true;
@@ -197,6 +199,12 @@ class ChartPanel {
         <div class="field indicator-field">
           <button type="button" class="indicator-btn" aria-expanded="false">지표 ▾</button>
           <div class="indicator-panel ind-popover" hidden></div>
+        </div>
+        <div class="segmented draw-group" role="group" aria-label="그리기 도구">
+          <button type="button" data-tool="trend" title="추세선 (두 점 클릭)">╱</button>
+          <button type="button" data-tool="hline" title="수평선 (한 점 클릭)">━</button>
+          <button type="button" data-tool="range" title="가격 범위 측정 (두 점 클릭)">⇕</button>
+          <button type="button" data-tool="clear" title="이 차트의 그리기 모두 삭제">지움</button>
         </div>
         <div class="panel-price" hidden>
           <span class="last">–</span>
@@ -359,11 +367,47 @@ class ChartPanel {
     this.chart.subscribeCrosshairMove((param) => {
       this.renderLegend(param?.time != null ? param : null);
     });
+
+    // 그리기 레이어 (메인 차트 위 캔버스 오버레이)
+    this.drawingLayer = new DrawingLayer({
+      container: this.els.paneMain,
+      chart: this.chart,
+      series: this.candleSeries,
+      getBars: () => this.bars,
+      getFmt: () => this.fmt,
+      onChange: (drawings) => {
+        this.drawingsByKey[this.symKey()] = drawings;
+        saveLayout();
+      },
+      onToolChange: (tool) => {
+        for (const b of this.els.drawGroup.querySelectorAll("button[data-tool]")) {
+          b.classList.toggle("active", b.dataset.tool === tool);
+        }
+      },
+    });
+    this.els.drawGroup = this.root.querySelector(".draw-group");
+    this.els.drawGroup.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-tool]");
+      if (!btn) return;
+      const tool = btn.dataset.tool;
+      if (tool === "clear") {
+        if (this.drawingLayer.drawings.length && confirm("이 차트의 그리기를 모두 삭제할까요?")) {
+          this.drawingLayer.clearAll();
+        }
+        return;
+      }
+      this.drawingLayer.setTool(this.drawingLayer.tool === tool ? null : tool);
+    });
+  }
+
+  symKey() {
+    return `${this.sel.exchange}|${this.sel.symbol}`;
   }
 
   destroy() {
     this.destroyed = true;
     this.loadToken++;
+    this.drawingLayer.destroy();
     for (const ro of this.resizeObservers) ro.disconnect();
     this.chart.remove();
     this.rsiChart.remove();
@@ -473,6 +517,7 @@ class ChartPanel {
     this.bars = data.candles;
     this.hasMoreHistory = data.candles.length >= PAGE_SIZE;
     this.els.emptyHint.hidden = this.bars.length > 0;
+    this.drawingLayer.setDrawings(this.drawingsByKey[this.symKey()] ?? []);
 
     const precision = inferPrecision(this.bars);
     this.fmt = numFmt(precision);
@@ -889,7 +934,7 @@ function currentLayoutState() {
   return {
     layout: layoutCount,
     splits,
-    panels: panels.map((p) => ({ ...p.sel, indicators: p.settings })),
+    panels: panels.map((p) => ({ ...p.sel, indicators: p.settings, drawings: p.drawingsByKey })),
   };
 }
 
@@ -930,6 +975,7 @@ function validSelection(sel) {
     // 사용자 지정 봉(예: 2h, 45m)도 서버 리샘플링으로 표시 가능하므로 형식만 검증
     timeframe: TF_RE.test(sel.timeframe ?? "") ? sel.timeframe : meta.timeframes[0],
     indicators: sel.indicators ?? null,
+    drawings: sel.drawings ?? null,
   };
 }
 

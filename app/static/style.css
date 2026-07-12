@@ -309,3 +309,13 @@ select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* 사용자 지정 봉 팝오버 */
 .tf-custom-panel { width: 230px; }
+
+/* ---------- 그리기 도구 ---------- */
+
+.draw-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+.draw-group button.active { background: var(--accent); color: #fff; }

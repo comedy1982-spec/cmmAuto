@@ -37,6 +37,17 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="cmmAuto Chart Viewer", lifespan=lifespan)
 
 
+@app.middleware("http")
+async def no_stale_static(request, call_next):
+    """업데이트(git pull) 후 브라우저가 옛 JS/CSS를 쓰지 않도록 항상 재검증시킨다.
+    no-cache는 '캐시 금지'가 아니라 '사용 전 서버에 변경 여부 확인'이라 304로 가볍다."""
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.get("/api/meta")
 async def meta():
     cfg = app.state.cfg

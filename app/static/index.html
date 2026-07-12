@@ -25,6 +25,11 @@
       <div id="timeframe-group" class="segmented" role="group" aria-label="타임프레임"></div>
     </div>
 
+    <div class="field indicator-field">
+      <button id="indicator-btn" type="button" class="indicator-btn" aria-expanded="false">지표 ▾</button>
+      <div id="indicator-panel" class="indicator-panel" hidden></div>
+    </div>
+
     <div class="spacer"></div>
 
     <div id="price-box" class="price-box" hidden>
@@ -39,14 +44,25 @@
   </header>
 
   <main id="chart-wrap">
-    <div id="legend" class="legend"></div>
-    <div id="chart"></div>
-    <div id="empty-hint" class="empty-hint" hidden>
-      아직 수집된 캔들이 없습니다. 수집기가 데이터를 채우는 중이면 잠시 후 자동으로 표시됩니다.
+    <div id="main-pane" class="pane pane-main">
+      <div id="legend" class="legend"></div>
+      <div id="chart" class="pane-chart"></div>
+      <div id="empty-hint" class="empty-hint" hidden>
+        아직 수집된 캔들이 없습니다. 수집기가 데이터를 채우는 중이면 잠시 후 자동으로 표시됩니다.
+      </div>
+    </div>
+    <div id="rsi-pane" class="pane pane-sub" hidden>
+      <div id="rsi-label" class="pane-label">RSI</div>
+      <div id="rsi-chart" class="pane-chart"></div>
+    </div>
+    <div id="macd-pane" class="pane pane-sub" hidden>
+      <div id="macd-label" class="pane-label">MACD</div>
+      <div id="macd-chart" class="pane-chart"></div>
     </div>
   </main>
 
   <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+  <script src="/static/indicators.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

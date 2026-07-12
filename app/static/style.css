@@ -306,3 +306,6 @@ select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .lay-save-btn:hover { filter: brightness(1.15); }
 .lay-msg { font-size: 12px; padding-top: 6px; color: var(--text-muted); }
 .lay-msg.err { color: var(--down); }
+
+/* 사용자 지정 봉 팝오버 */
+.tf-custom-panel { width: 230px; }

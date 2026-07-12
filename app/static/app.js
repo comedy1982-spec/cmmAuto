@@ -22,6 +22,17 @@ const BAND_COLOR = "#7c8aa0"; // Envelope/볼린저 밴드용 중립 회청색
 
 const PRICE_SCALE_WIDTH = 84; // 패널 내 상하 정렬을 위해 모든 차트의 가격축 폭 통일
 
+// 수집 봉 외에 항상 노출하는 파생 봉(서버가 저장 데이터에서 리샘플링)
+const EXTRA_TFS = ["1w", "1M"];
+const TF_RE = /^([1-9]\d{0,2})([mhdwM])$/;
+const TF_UNITS = [
+  { value: "m", label: "분" },
+  { value: "h", label: "시간" },
+  { value: "d", label: "일" },
+  { value: "w", label: "주" },
+  { value: "M", label: "월" },
+];
+
 let meta = null; // /api/meta 응답 (전 패널 공유)
 
 /* ---------- 공용 유틸 ---------- */
@@ -171,10 +182,21 @@ class ChartPanel {
       <header class="panel-bar">
         <select class="sel-exchange" aria-label="거래소"></select>
         <select class="sel-symbol" aria-label="심볼"></select>
-        <div class="segmented tf-group" role="group" aria-label="타임프레임"></div>
+        <div class="field indicator-field tf-field">
+          <div class="segmented tf-group" role="group" aria-label="타임프레임"></div>
+          <div class="indicator-panel tf-custom-panel" hidden>
+            <div class="ind-title">사용자 지정 봉</div>
+            <div class="ind-row">
+              <input type="number" class="tf-custom-n" min="1" max="999" step="1" value="3" />
+              <select class="tf-custom-unit"></select>
+              <button type="button" class="lay-save-btn tf-custom-apply">적용</button>
+            </div>
+            <div class="lay-msg tf-custom-msg"></div>
+          </div>
+        </div>
         <div class="field indicator-field">
           <button type="button" class="indicator-btn" aria-expanded="false">지표 ▾</button>
-          <div class="indicator-panel" hidden></div>
+          <div class="indicator-panel ind-popover" hidden></div>
         </div>
         <div class="panel-price" hidden>
           <span class="last">–</span>
@@ -201,8 +223,13 @@ class ChartPanel {
       exchange: $("sel-exchange"),
       symbol: $("sel-symbol"),
       tfGroup: $("tf-group"),
+      tfCustomPanel: $("tf-custom-panel"),
+      tfCustomN: $("tf-custom-n"),
+      tfCustomUnit: $("tf-custom-unit"),
+      tfCustomApply: $("tf-custom-apply"),
+      tfCustomMsg: $("tf-custom-msg"),
       indBtn: $("indicator-btn"),
-      indPanel: $("indicator-panel"),
+      indPanel: $("ind-popover"),
       price: $("panel-price"),
       last: $("last"),
       chg: $("chg"),
@@ -241,12 +268,38 @@ class ChartPanel {
       this.els.indBtn.setAttribute("aria-expanded", String(open));
     });
     this.els.indPanel.addEventListener("click", (e) => e.stopPropagation());
+
+    // 사용자 지정 봉 입력
+    for (const u of TF_UNITS) {
+      const o = document.createElement("option");
+      o.value = u.value;
+      o.textContent = u.label;
+      this.els.tfCustomUnit.appendChild(o);
+    }
+    this.els.tfCustomPanel.addEventListener("click", (e) => e.stopPropagation());
+    const applyCustomTf = () => {
+      const n = Number(this.els.tfCustomN.value);
+      const unit = this.els.tfCustomUnit.value;
+      if (!Number.isInteger(n) || n < 1 || n > 999) {
+        this.els.tfCustomMsg.textContent = "1~999 사이의 정수를 입력해 주세요";
+        this.els.tfCustomMsg.className = "lay-msg tf-custom-msg err";
+        return;
+      }
+      this.sel.timeframe = `${n}${unit}`;
+      this.closeIndicatorPopover();
+      this.renderTimeframes();
+      saveLayout();
+      this.loadInitial();
+    };
+    this.els.tfCustomApply.addEventListener("click", applyCustomTf);
+    this.els.tfCustomN.addEventListener("keydown", (e) => { if (e.key === "Enter") applyCustomTf(); });
   }
 
   closeIndicatorPopover() {
     this.els.indPanel.hidden = true;
     this.els.indBtn.classList.remove("open");
     this.els.indBtn.setAttribute("aria-expanded", "false");
+    this.els.tfCustomPanel.hidden = true;
   }
 
   createCharts() {
@@ -325,9 +378,9 @@ class ChartPanel {
   }
 
   firstSupportedTimeframe() {
-    const supported = new Set(this.exchangeMeta()?.status?.timeframes ?? meta.timeframes);
-    if (supported.has(this.sel.timeframe)) return this.sel.timeframe;
-    return meta.timeframes.find((tf) => supported.has(tf)) ?? meta.timeframes[0];
+    // 수집 봉이 아니어도 서버가 리샘플링해 주므로 형식만 맞으면 유지
+    if (TF_RE.test(this.sel.timeframe ?? "")) return this.sel.timeframe;
+    return meta.timeframes.includes("1h") ? "1h" : meta.timeframes[0];
   }
 
   renderToolbar() {
@@ -355,12 +408,14 @@ class ChartPanel {
 
   renderTimeframes() {
     this.els.tfGroup.innerHTML = "";
-    const supported = new Set(this.exchangeMeta()?.status?.timeframes ?? meta.timeframes);
-    for (const tf of meta.timeframes) {
+    // 수집 봉 + 주/월봉, 그리고 현재 선택된 사용자 지정 봉
+    const list = [...meta.timeframes, ...EXTRA_TFS.filter((t) => !meta.timeframes.includes(t))];
+    if (this.sel.timeframe && !list.includes(this.sel.timeframe)) list.push(this.sel.timeframe);
+
+    for (const tf of list) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.textContent = tf;
-      btn.disabled = !supported.has(tf);
       btn.classList.toggle("active", tf === this.sel.timeframe);
       btn.addEventListener("click", () => {
         this.sel.timeframe = tf;
@@ -370,6 +425,29 @@ class ChartPanel {
       });
       this.els.tfGroup.appendChild(btn);
     }
+
+    // 사용자 지정 봉 입력 열기
+    const plus = document.createElement("button");
+    plus.type = "button";
+    plus.textContent = "+";
+    plus.title = "사용자 지정 봉 (예: 3분, 2시간, 2주)";
+    plus.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = this.els.tfCustomPanel.hidden;
+      closeAllIndicatorPopovers();
+      closeLayoutPopover();
+      if (open) {
+        const m = TF_RE.exec(this.sel.timeframe ?? "");
+        if (m) {
+          this.els.tfCustomN.value = m[1];
+          this.els.tfCustomUnit.value = m[2];
+        }
+        this.els.tfCustomMsg.textContent = "";
+        this.els.tfCustomPanel.hidden = false;
+        this.els.tfCustomN.focus();
+      }
+    });
+    this.els.tfGroup.appendChild(plus);
   }
 
   /* ----- 데이터 로드 ----- */
@@ -849,7 +927,8 @@ function validSelection(sel) {
   return {
     exchange: sel.exchange,
     symbol: exMeta.symbols.includes(sel.symbol) ? sel.symbol : exMeta.symbols[0],
-    timeframe: meta.timeframes.includes(sel.timeframe) ? sel.timeframe : meta.timeframes[0],
+    // 사용자 지정 봉(예: 2h, 45m)도 서버 리샘플링으로 표시 가능하므로 형식만 검증
+    timeframe: TF_RE.test(sel.timeframe ?? "") ? sel.timeframe : meta.timeframes[0],
     indicators: sel.indicators ?? null,
   };
 }

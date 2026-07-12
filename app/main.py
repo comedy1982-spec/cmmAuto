@@ -14,6 +14,7 @@ from .collector import Collector
 from .config import load_config
 from .db import Database
 from .paths import BUNDLE_DIR
+from .resample import parse_tf, pick_source, resample, source_fetch_limit
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
@@ -78,11 +79,29 @@ async def candles(
     cfg = app.state.cfg
     if exchange not in cfg.exchanges:
         raise HTTPException(404, f"설정에 없는 거래소: {exchange}")
-    rows = await app.state.db.get_candles(
-        exchange, symbol, timeframe,
-        limit=limit,
-        before_ms=before * 1000 if before is not None else None,
-    )
+    before_ms = before * 1000 if before is not None else None
+
+    # 1) 수집 대상 봉이면 저장된 캔들을 그대로 반환
+    rows: list[dict] = []
+    if timeframe in cfg.timeframes:
+        rows = await app.state.db.get_candles(exchange, symbol, timeframe, limit=limit, before_ms=before_ms)
+
+    # 2) 그 외(주봉·월봉·사용자 지정 봉 등)는 저장 데이터에서 리샘플링
+    if not rows:
+        if parse_tf(timeframe) is None:
+            raise HTTPException(400, f"잘못된 타임프레임: {timeframe} (예: 3m, 2h, 1d, 1w, 1M)")
+        src = pick_source(cfg.timeframes, timeframe)
+        if src is not None:
+            fetch = source_fetch_limit(src, timeframe, limit)
+            src_rows = await app.state.db.get_candles(exchange, symbol, src, limit=fetch, before_ms=before_ms)
+            res = resample(src_rows, timeframe)
+            # 소스를 상한까지 읽었다면 가장 오래된 버킷은 앞부분이 잘렸을 수 있어 제외
+            if len(src_rows) >= fetch and len(res) > 1:
+                res = res[1:]
+            rows = res[-limit:]
+        elif timeframe not in cfg.timeframes:
+            raise HTTPException(400, f"리샘플 소스가 없는 타임프레임: {timeframe}")
+
     return {"exchange": exchange, "symbol": symbol, "timeframe": timeframe, "candles": rows}
 
 

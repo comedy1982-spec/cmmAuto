@@ -1,0 +1,17 @@
+{
+  "database": "data/candles.db",
+  "poll_interval_seconds": 20,
+  "backfill_candles": 1500,
+  "timeframes": ["1m", "5m", "15m", "1h", "4h", "1d"],
+  "exchanges": {
+    "binance": {
+      "symbols": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"]
+    },
+    "upbit": {
+      "symbols": ["BTC/KRW", "ETH/KRW", "XRP/KRW"]
+    },
+    "bybit": {
+      "symbols": ["BTC/USDT", "ETH/USDT"]
+    }
+  }
+}

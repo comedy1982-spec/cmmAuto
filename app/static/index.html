@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>cmmAuto Chart Viewer</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="toolbar">
+    <div class="brand">cmmAuto</div>
+
+    <label class="field">
+      <span class="field-label">거래소</span>
+      <select id="exchange-select"></select>
+    </label>
+
+    <label class="field">
+      <span class="field-label">심볼</span>
+      <select id="symbol-select"></select>
+    </label>
+
+    <div class="field">
+      <span class="field-label">봉</span>
+      <div id="timeframe-group" class="segmented" role="group" aria-label="타임프레임"></div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div id="price-box" class="price-box" hidden>
+      <span id="last-price" class="last-price">–</span>
+      <span id="price-change" class="price-change">–</span>
+    </div>
+
+    <div class="status" title="수집기 상태">
+      <span id="status-dot" class="dot dot-unknown"></span>
+      <span id="status-text">연결 중…</span>
+    </div>
+  </header>
+
+  <main id="chart-wrap">
+    <div id="legend" class="legend"></div>
+    <div id="chart"></div>
+    <div id="empty-hint" class="empty-hint" hidden>
+      아직 수집된 캔들이 없습니다. 수집기가 데이터를 채우는 중이면 잠시 후 자동으로 표시됩니다.
+    </div>
+  </main>
+
+  <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

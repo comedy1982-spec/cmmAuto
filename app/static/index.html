@@ -10,19 +10,14 @@
   <header class="toolbar">
     <div class="brand">cmmAuto</div>
 
-    <label class="field">
-      <span class="field-label">거래소</span>
-      <select id="exchange-select"></select>
-    </label>
-
-    <label class="field">
-      <span class="field-label">심볼</span>
-      <select id="symbol-select"></select>
-    </label>
-
     <div class="field">
-      <span class="field-label">봉</span>
-      <div id="timeframe-group" class="segmented" role="group" aria-label="타임프레임"></div>
+      <span class="field-label">분할</span>
+      <div id="layout-group" class="segmented" role="group" aria-label="화면 분할">
+        <button type="button" data-layout="1" title="1분할">□</button>
+        <button type="button" data-layout="2" title="2분할 (좌우)">◫</button>
+        <button type="button" data-layout="3" title="3분할 (좌 1 + 우 2)">◧</button>
+        <button type="button" data-layout="4" title="4분할 (2×2)">▦</button>
+      </div>
     </div>
 
     <div class="field indicator-field">
@@ -32,34 +27,13 @@
 
     <div class="spacer"></div>
 
-    <div id="price-box" class="price-box" hidden>
-      <span id="last-price" class="last-price">–</span>
-      <span id="price-change" class="price-change">–</span>
-    </div>
-
     <div class="status" title="수집기 상태">
       <span id="status-dot" class="dot dot-unknown"></span>
       <span id="status-text">연결 중…</span>
     </div>
   </header>
 
-  <main id="chart-wrap">
-    <div id="main-pane" class="pane pane-main">
-      <div id="legend" class="legend"></div>
-      <div id="chart" class="pane-chart"></div>
-      <div id="empty-hint" class="empty-hint" hidden>
-        아직 수집된 캔들이 없습니다. 수집기가 데이터를 채우는 중이면 잠시 후 자동으로 표시됩니다.
-      </div>
-    </div>
-    <div id="rsi-pane" class="pane pane-sub" hidden>
-      <div id="rsi-label" class="pane-label">RSI</div>
-      <div id="rsi-chart" class="pane-chart"></div>
-    </div>
-    <div id="macd-pane" class="pane pane-sub" hidden>
-      <div id="macd-label" class="pane-label">MACD</div>
-      <div id="macd-chart" class="pane-chart"></div>
-    </div>
-  </main>
+  <main id="grid" class="grid" data-layout="1"></main>
 
   <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
   <script src="/static/indicators.js"></script>

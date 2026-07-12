@@ -1,16 +1,15 @@
-/* cmmAuto 차트 뷰어 프론트엔드
+/* cmmAuto 차트 뷰어 프론트엔드 — 멀티 차트 (최대 4분할)
  *
- * - /api/meta 로 거래소/심볼/타임프레임 목록과 수집기 상태를 받아 툴바 구성
- * - /api/candles 로 캔들을 받아 lightweight-charts 캔들 + 거래량 시리즈 렌더
- * - 왼쪽 끝으로 스크롤하면 과거 캔들을 추가 로드 (무한 히스토리)
- * - LIVE_POLL_MS 주기로 마지막 캔들을 갱신해 실시간처럼 동작
- * - 지표: 이동평균선(SMA/EMA ×4), Envelope, 볼린저밴드, 거래량, RSI, MACD
- *   — "지표" 패널에서 켜고 끄며 설정은 localStorage에 저장
+ * - 툴바의 분할 버튼(1/2/3/4)으로 트레이딩뷰처럼 화면을 나눠 여러 차트를 동시에 본다
+ * - 각 패널은 거래소/심볼/봉을 독립적으로 선택하고, 자체적으로 과거 로드·실시간 갱신
+ * - 지표 설정(이동평균선·Envelope·볼린저·거래량·RSI·MACD)은 전 패널 공통 적용
+ * - 분할 상태·패널별 선택·지표 설정은 localStorage에 저장되어 새로고침 후 유지
  */
 
 const LIVE_POLL_MS = 5000;
 const META_POLL_MS = 15000;
 const PAGE_SIZE = 600;
+const MAX_PANELS = 4;
 
 // 검증된 상승/하락 색 (다크 표면 #131722 기준 대비·CVD 분리 PASS)
 const UP = "#26a69a";
@@ -19,37 +18,86 @@ const DOWN = "#ef5350";
 const MA_COLORS = ["#d97706", "#3b82f6", "#db2777", "#8b5cf6"];
 const BAND_COLOR = "#7c8aa0"; // Envelope/볼린저 밴드용 중립 회청색
 
-const els = {
-  exchange: document.getElementById("exchange-select"),
-  symbol: document.getElementById("symbol-select"),
-  tfGroup: document.getElementById("timeframe-group"),
-  lastPrice: document.getElementById("last-price"),
-  priceChange: document.getElementById("price-change"),
-  priceBox: document.getElementById("price-box"),
-  statusDot: document.getElementById("status-dot"),
-  statusText: document.getElementById("status-text"),
-  legend: document.getElementById("legend"),
-  emptyHint: document.getElementById("empty-hint"),
-  indicatorBtn: document.getElementById("indicator-btn"),
-  indicatorPanel: document.getElementById("indicator-panel"),
-  rsiPane: document.getElementById("rsi-pane"),
-  rsiLabel: document.getElementById("rsi-label"),
-  macdPane: document.getElementById("macd-pane"),
-  macdLabel: document.getElementById("macd-label"),
+const PRICE_SCALE_WIDTH = 84; // 패널 내 상하 정렬을 위해 모든 차트의 가격축 폭 통일
+
+let meta = null; // /api/meta 응답 (전 패널 공유)
+
+/* ---------- 공용 유틸 ---------- */
+
+async function api(path) {
+  const res = await fetch(path);
+  if (!res.ok) throw new Error(`${path} → HTTP ${res.status}`);
+  return res.json();
+}
+
+function candlePoint(b) {
+  return { time: b.time, open: b.open, high: b.high, low: b.low, close: b.close };
+}
+
+function volumePoint(b) {
+  const up = b.close >= b.open;
+  return { time: b.time, value: b.volume, color: up ? "rgba(38,166,154,0.45)" : "rgba(239,83,80,0.45)" };
+}
+
+// 데이터에 맞는 소수 자릿수 추정 (KRW 정수가·소액 알트코인 모두 대응)
+function inferPrecision(bars) {
+  if (bars.length === 0) return 2;
+  let seen = 0;
+  for (const b of bars.slice(-80)) {
+    const s = String(b.close);
+    const i = s.indexOf(".");
+    if (i >= 0) seen = Math.max(seen, Math.min(8, s.length - i - 1));
+  }
+  const price = Math.abs(bars[bars.length - 1].close);
+  const cap = price >= 1000 ? 2 : price >= 1 ? 4 : 8;
+  return Math.min(seen, cap);
+}
+
+const numFmt = (precision) =>
+  new Intl.NumberFormat("ko-KR", { minimumFractionDigits: 0, maximumFractionDigits: precision });
+
+/** 지표 워밍업 구간을 whitespace 포인트로 채워 메인 차트와 논리 인덱스를 1:1로 맞춘다 */
+function withWarmupWhitespace(bars, points) {
+  if (points.length === 0) return points;
+  const first = points[0].time;
+  const pad = [];
+  for (const b of bars) {
+    if (b.time >= first) break;
+    pad.push({ time: b.time });
+  }
+  return pad.concat(points);
+}
+
+function baseChartOptions() {
+  return {
+    layout: {
+      background: { type: "solid", color: "#131722" },
+      textColor: "#787b86",
+      fontSize: 12,
+    },
+    grid: {
+      vertLines: { color: "#1e222d" },
+      horzLines: { color: "#1e222d" },
+    },
+    crosshair: {
+      mode: LightweightCharts.CrosshairMode.Normal,
+      vertLine: { color: "#4c525e", labelBackgroundColor: "#2a2e39" },
+      horzLine: { color: "#4c525e", labelBackgroundColor: "#2a2e39" },
+    },
+    rightPriceScale: { borderColor: "#2a2e39", minimumWidth: PRICE_SCALE_WIDTH },
+    timeScale: { borderColor: "#2a2e39", timeVisible: true, secondsVisible: false },
+    localization: { locale: "ko-KR" },
+  };
+}
+
+const lineDefaults = {
+  lineWidth: 1,
+  priceLineVisible: false,
+  lastValueVisible: false,
+  crosshairMarkerVisible: false,
 };
 
-const state = {
-  meta: null,
-  exchange: null,
-  symbol: null,
-  timeframe: null,
-  bars: [],            // 오름차순 캔들 (API 형식 그대로)
-  loadingOlder: false,
-  hasMoreHistory: true,
-  loadToken: 0,        // 선택 변경 시 진행 중이던 응답 무시용
-};
-
-/* ---------- 지표 설정 (localStorage 저장) ---------- */
+/* ---------- 지표 설정 (전 패널 공통, localStorage 저장) ---------- */
 
 const SETTINGS_KEY = "cmmauto.indicators.v1";
 
@@ -88,435 +136,562 @@ function saveSettings() {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 }
 
-/* ---------- 차트 초기화 (메인 + RSI/MACD 서브 패널) ---------- */
+/* ---------- 개별 차트 패널 ---------- */
 
-const PRICE_SCALE_WIDTH = 84; // 패널 간 시간축 정렬을 위해 모든 패널의 가격축 폭을 통일
+class ChartPanel {
+  /** @param sel {exchange, symbol, timeframe} */
+  constructor(container, sel) {
+    this.sel = sel;
+    this.bars = [];
+    this.loadingOlder = false;
+    this.hasMoreHistory = true;
+    this.loadToken = 0;
+    this.fmt = numFmt(2);
+    this.destroyed = false;
 
-function baseChartOptions() {
+    this.root = document.createElement("section");
+    this.root.className = "panel";
+    this.buildDom();
+    container.appendChild(this.root);
+    this.createCharts();
+    this.renderToolbar();
+    this.syncIndicatorSeries();
+    this.loadInitial();
+  }
+
+  buildDom() {
+    this.root.innerHTML = `
+      <header class="panel-bar">
+        <select class="sel-exchange" aria-label="거래소"></select>
+        <select class="sel-symbol" aria-label="심볼"></select>
+        <div class="segmented tf-group" role="group" aria-label="타임프레임"></div>
+        <div class="panel-price" hidden>
+          <span class="last">–</span>
+          <span class="chg">–</span>
+        </div>
+      </header>
+      <div class="panel-body">
+        <div class="pane pane-main">
+          <div class="legend"></div>
+          <div class="pane-chart chart-main"></div>
+          <div class="empty-hint" hidden>아직 수집된 캔들이 없습니다. 수집기가 데이터를 채우는 중이면 잠시 후 자동으로 표시됩니다.</div>
+        </div>
+        <div class="pane pane-sub pane-rsi" hidden>
+          <div class="pane-label label-rsi">RSI</div>
+          <div class="pane-chart chart-rsi"></div>
+        </div>
+        <div class="pane pane-sub pane-macd" hidden>
+          <div class="pane-label label-macd">MACD</div>
+          <div class="pane-chart chart-macd"></div>
+        </div>
+      </div>`;
+    const $ = (cls) => this.root.querySelector("." + cls);
+    this.els = {
+      exchange: $("sel-exchange"),
+      symbol: $("sel-symbol"),
+      tfGroup: $("tf-group"),
+      price: $("panel-price"),
+      last: $("last"),
+      chg: $("chg"),
+      legend: $("legend"),
+      emptyHint: $("empty-hint"),
+      paneMain: $("pane-main"),
+      paneRsi: $("pane-rsi"),
+      paneMacd: $("pane-macd"),
+      labelRsi: $("label-rsi"),
+      labelMacd: $("label-macd"),
+      chartMain: $("chart-main"),
+      chartRsi: $("chart-rsi"),
+      chartMacd: $("chart-macd"),
+    };
+
+    this.els.exchange.addEventListener("change", () => {
+      this.sel.exchange = this.els.exchange.value;
+      this.sel.symbol = this.exchangeMeta()?.symbols?.[0] ?? null;
+      this.sel.timeframe = this.firstSupportedTimeframe();
+      this.renderToolbar();
+      saveLayout();
+      this.loadInitial();
+    });
+    this.els.symbol.addEventListener("change", () => {
+      this.sel.symbol = this.els.symbol.value;
+      saveLayout();
+      this.loadInitial();
+    });
+  }
+
+  createCharts() {
+    this.chart = LightweightCharts.createChart(this.els.chartMain, baseChartOptions());
+    // 서브 패널은 메인 차트의 시간 범위를 따라가는 수동 디스플레이 (직접 스크롤/줌 불가)
+    const subOptions = () => ({
+      ...baseChartOptions(),
+      timeScale: { borderColor: "#2a2e39", timeVisible: true, secondsVisible: false, visible: false },
+      handleScroll: false,
+      handleScale: false,
+    });
+    this.rsiChart = LightweightCharts.createChart(this.els.chartRsi, subOptions());
+    this.macdChart = LightweightCharts.createChart(this.els.chartMacd, subOptions());
+
+    this.candleSeries = this.chart.addCandlestickSeries({
+      upColor: UP, downColor: DOWN,
+      wickUpColor: UP, wickDownColor: DOWN,
+      borderVisible: false,
+    });
+    this.volumeSeries = this.chart.addHistogramSeries({
+      priceScaleId: "volume",
+      priceFormat: { type: "volume" },
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    this.chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+
+    // 지표 시리즈 슬롯
+    this.ind = {
+      ma: [null, null, null, null],
+      envUpper: null, envLower: null,
+      bbUpper: null, bbMiddle: null, bbLower: null,
+      rsi: null,
+      macdLine: null, macdSignal: null, macdHist: null,
+    };
+
+    this.resizeObservers = [];
+    for (const [paneEl, chartObj] of [
+      [this.els.paneMain, this.chart],
+      [this.els.paneRsi, this.rsiChart],
+      [this.els.paneMacd, this.macdChart],
+    ]) {
+      const ro = new ResizeObserver(() => chartObj.resize(paneEl.clientWidth, paneEl.clientHeight));
+      ro.observe(paneEl);
+      this.resizeObservers.push(ro);
+    }
+
+    // 시간축 동기화: 메인 → 서브 단방향
+    // (range 이벤트가 비동기라 양방향은 setData 시 초기 범위가 역전파된다)
+    this.chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (!range) return;
+      this.rsiChart.timeScale().setVisibleLogicalRange(range);
+      this.macdChart.timeScale().setVisibleLogicalRange(range);
+      if (range.from < 15) this.loadOlder();
+    });
+
+    this.chart.subscribeCrosshairMove((param) => {
+      this.renderLegend(param?.time != null ? param : null);
+    });
+  }
+
+  destroy() {
+    this.destroyed = true;
+    this.loadToken++;
+    for (const ro of this.resizeObservers) ro.disconnect();
+    this.chart.remove();
+    this.rsiChart.remove();
+    this.macdChart.remove();
+    this.root.remove();
+  }
+
+  /* ----- 툴바 ----- */
+
+  exchangeMeta() {
+    return meta?.exchanges?.[this.sel.exchange];
+  }
+
+  firstSupportedTimeframe() {
+    const supported = new Set(this.exchangeMeta()?.status?.timeframes ?? meta.timeframes);
+    if (supported.has(this.sel.timeframe)) return this.sel.timeframe;
+    return meta.timeframes.find((tf) => supported.has(tf)) ?? meta.timeframes[0];
+  }
+
+  renderToolbar() {
+    const { exchange, symbol } = this.els;
+    exchange.innerHTML = "";
+    for (const exId of Object.keys(meta.exchanges)) {
+      const opt = document.createElement("option");
+      opt.value = exId;
+      opt.textContent = exId;
+      exchange.appendChild(opt);
+    }
+    exchange.value = this.sel.exchange;
+
+    symbol.innerHTML = "";
+    for (const sym of this.exchangeMeta()?.symbols ?? []) {
+      const opt = document.createElement("option");
+      opt.value = sym;
+      opt.textContent = sym;
+      symbol.appendChild(opt);
+    }
+    symbol.value = this.sel.symbol;
+
+    this.renderTimeframes();
+  }
+
+  renderTimeframes() {
+    this.els.tfGroup.innerHTML = "";
+    const supported = new Set(this.exchangeMeta()?.status?.timeframes ?? meta.timeframes);
+    for (const tf of meta.timeframes) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = tf;
+      btn.disabled = !supported.has(tf);
+      btn.classList.toggle("active", tf === this.sel.timeframe);
+      btn.addEventListener("click", () => {
+        this.sel.timeframe = tf;
+        this.renderTimeframes();
+        saveLayout();
+        this.loadInitial();
+      });
+      this.els.tfGroup.appendChild(btn);
+    }
+  }
+
+  /* ----- 데이터 로드 ----- */
+
+  candlesUrl(extra = "") {
+    const { exchange, symbol, timeframe } = this.sel;
+    return `/api/candles?exchange=${encodeURIComponent(exchange)}&symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}${extra}`;
+  }
+
+  async loadInitial() {
+    const token = ++this.loadToken;
+    this.bars = [];
+    this.hasMoreHistory = true;
+    this.candleSeries.setData([]);
+    this.volumeSeries.setData([]);
+    this.recomputeIndicators();
+    this.els.price.hidden = true;
+    this.els.legend.textContent = "";
+
+    const data = await api(this.candlesUrl(`&limit=${PAGE_SIZE}`));
+    if (token !== this.loadToken || this.destroyed) return;
+
+    this.bars = data.candles;
+    this.hasMoreHistory = data.candles.length >= PAGE_SIZE;
+    this.els.emptyHint.hidden = this.bars.length > 0;
+
+    const precision = inferPrecision(this.bars);
+    this.fmt = numFmt(precision);
+    this.candleSeries.applyOptions({
+      priceFormat: { type: "price", precision, minMove: precision ? Math.pow(10, -precision) : 1 },
+    });
+
+    this.candleSeries.setData(this.bars.map(candlePoint));
+    this.volumeSeries.setData(this.bars.map(volumePoint));
+    this.recomputeIndicators();
+    // 최근 150봉만 보이게 시작 (전체를 펼치면 왼쪽 끝에 닿아 과거 로드가 연쇄됨)
+    this.chart.timeScale().setVisibleLogicalRange({
+      from: Math.max(0, this.bars.length - 150),
+      to: this.bars.length + 5,
+    });
+    this.updatePriceBox();
+    this.renderLegend(null);
+  }
+
+  async loadOlder() {
+    if (this.loadingOlder || !this.hasMoreHistory || this.bars.length === 0) return;
+    this.loadingOlder = true;
+    const token = this.loadToken;
+    try {
+      const oldest = this.bars[0].time;
+      const data = await api(this.candlesUrl(`&limit=${PAGE_SIZE}&before=${oldest}`));
+      if (token !== this.loadToken || this.destroyed) return;
+      if (data.candles.length === 0) {
+        this.hasMoreHistory = false;
+        return;
+      }
+      this.bars = data.candles.concat(this.bars);
+      this.hasMoreHistory = data.candles.length >= PAGE_SIZE;
+      this.candleSeries.setData(this.bars.map(candlePoint));
+      this.volumeSeries.setData(this.bars.map(volumePoint));
+      this.recomputeIndicators();
+    } finally {
+      this.loadingOlder = false;
+    }
+  }
+
+  async pollLive() {
+    if (this.destroyed || this.bars.length === 0) return;
+    const token = this.loadToken;
+    try {
+      const data = await api(this.candlesUrl("&limit=3"));
+      if (token !== this.loadToken || this.destroyed || data.candles.length === 0) return;
+      const lastKnown = this.bars[this.bars.length - 1].time;
+      let changed = false;
+      for (const b of data.candles) {
+        if (b.time < lastKnown) continue;
+        if (b.time === lastKnown) {
+          this.bars[this.bars.length - 1] = b;
+        } else {
+          this.bars.push(b);
+        }
+        this.candleSeries.update(candlePoint(b));
+        this.volumeSeries.update(volumePoint(b));
+        changed = true;
+      }
+      if (changed) this.recomputeIndicators();
+      this.els.emptyHint.hidden = true;
+      this.updatePriceBox();
+    } catch {
+      /* 일시적 네트워크 오류는 다음 폴링에서 회복 */
+    }
+  }
+
+  /* ----- 지표 ----- */
+
+  addLine(target, color, extra = {}) {
+    return target.addLineSeries({ ...lineDefaults, color, ...extra });
+  }
+
+  removeInd(target, key) {
+    if (this.ind[key]) {
+      target.removeSeries(this.ind[key]);
+      this.ind[key] = null;
+    }
+  }
+
+  /** 전역 지표 설정에 맞게 이 패널의 시리즈를 만들거나 제거한다 */
+  syncIndicatorSeries() {
+    const ind = this.ind;
+
+    settings.ma.forEach((m, i) => {
+      if (m.on && !ind.ma[i]) ind.ma[i] = this.addLine(this.chart, MA_COLORS[i], { lineWidth: 2 });
+      if (!m.on && ind.ma[i]) { this.chart.removeSeries(ind.ma[i]); ind.ma[i] = null; }
+    });
+
+    if (settings.envelope.on) {
+      if (!ind.envUpper) ind.envUpper = this.addLine(this.chart, BAND_COLOR, { lineStyle: LightweightCharts.LineStyle.Dashed });
+      if (!ind.envLower) ind.envLower = this.addLine(this.chart, BAND_COLOR, { lineStyle: LightweightCharts.LineStyle.Dashed });
+    } else {
+      this.removeInd(this.chart, "envUpper");
+      this.removeInd(this.chart, "envLower");
+    }
+
+    if (settings.bollinger.on) {
+      if (!ind.bbUpper) ind.bbUpper = this.addLine(this.chart, BAND_COLOR, { lineStyle: LightweightCharts.LineStyle.Dotted });
+      if (!ind.bbMiddle) ind.bbMiddle = this.addLine(this.chart, BAND_COLOR);
+      if (!ind.bbLower) ind.bbLower = this.addLine(this.chart, BAND_COLOR, { lineStyle: LightweightCharts.LineStyle.Dotted });
+    } else {
+      this.removeInd(this.chart, "bbUpper");
+      this.removeInd(this.chart, "bbMiddle");
+      this.removeInd(this.chart, "bbLower");
+    }
+
+    this.volumeSeries.applyOptions({ visible: settings.volume.on });
+
+    this.els.paneRsi.hidden = !settings.rsi.on;
+    if (settings.rsi.on) {
+      if (!ind.rsi) {
+        ind.rsi = this.addLine(this.rsiChart, "#8b5cf6", { lineWidth: 2, lastValueVisible: true });
+        ind.rsi.createPriceLine({ price: 70, color: "#4c525e", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: false });
+        ind.rsi.createPriceLine({ price: 30, color: "#4c525e", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: false });
+      }
+      this.els.labelRsi.textContent = `RSI ${settings.rsi.period}`;
+    } else {
+      this.removeInd(this.rsiChart, "rsi");
+    }
+
+    this.els.paneMacd.hidden = !settings.macd.on;
+    if (settings.macd.on) {
+      if (!ind.macdHist) {
+        ind.macdHist = this.macdChart.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false });
+        ind.macdLine = this.addLine(this.macdChart, "#3b82f6", { lineWidth: 2, lastValueVisible: true });
+        ind.macdSignal = this.addLine(this.macdChart, "#d97706", { lineWidth: 1 });
+      }
+      this.els.labelMacd.textContent = `MACD ${settings.macd.fast},${settings.macd.slow},${settings.macd.signal}`;
+    } else {
+      this.removeInd(this.macdChart, "macdHist");
+      this.removeInd(this.macdChart, "macdLine");
+      this.removeInd(this.macdChart, "macdSignal");
+    }
+
+    // 시간축은 가장 아래에 보이는 패널에만 표시
+    const lowest = settings.macd.on ? "macd" : settings.rsi.on ? "rsi" : "main";
+    this.chart.timeScale().applyOptions({ visible: lowest === "main" });
+    this.rsiChart.timeScale().applyOptions({ visible: lowest === "rsi" });
+    this.macdChart.timeScale().applyOptions({ visible: lowest === "macd" });
+  }
+
+  pushRangeToSubs() {
+    const r = this.chart.timeScale().getVisibleLogicalRange();
+    if (!r) return;
+    this.rsiChart.timeScale().setVisibleLogicalRange(r);
+    this.macdChart.timeScale().setVisibleLogicalRange(r);
+  }
+
+  /** 현재 캔들로 활성 지표를 전부 다시 계산해 시리즈에 반영한다 */
+  recomputeIndicators() {
+    try {
+      this.recomputeIndicatorsInner();
+    } finally {
+      // 첫 setData 시 서브 차트의 "전체 보기" 초기화가 비동기로 늦게 적용될 수
+      // 있어, 즉시 + 다음 프레임에 한 번 더 메인 범위를 맞춘다.
+      this.pushRangeToSubs();
+      requestAnimationFrame(() => { if (!this.destroyed) this.pushRangeToSubs(); });
+    }
+  }
+
+  recomputeIndicatorsInner() {
+    const bars = this.bars;
+    const ind = this.ind;
+    settings.ma.forEach((m, i) => {
+      if (ind.ma[i]) ind.ma[i].setData(bars.length ? Indicators.ma(bars, m.period, m.type) : []);
+    });
+    if (ind.envUpper) {
+      const env = bars.length ? Indicators.envelope(bars, settings.envelope.period, settings.envelope.percent) : { upper: [], lower: [] };
+      ind.envUpper.setData(env.upper);
+      ind.envLower.setData(env.lower);
+    }
+    if (ind.bbUpper) {
+      const bb = bars.length ? Indicators.bollinger(bars, settings.bollinger.period, settings.bollinger.mult) : { upper: [], middle: [], lower: [] };
+      ind.bbUpper.setData(bb.upper);
+      ind.bbMiddle.setData(bb.middle);
+      ind.bbLower.setData(bb.lower);
+    }
+    if (ind.rsi) {
+      ind.rsi.setData(bars.length ? withWarmupWhitespace(bars, Indicators.rsi(bars, settings.rsi.period)) : []);
+    }
+    if (ind.macdHist) {
+      const m = bars.length
+        ? Indicators.macd(bars, settings.macd.fast, settings.macd.slow, settings.macd.signal, "rgba(38,166,154,0.5)", "rgba(239,83,80,0.5)")
+        : { macd: [], signal: [], hist: [] };
+      ind.macdHist.setData(withWarmupWhitespace(bars, m.hist));
+      ind.macdLine.setData(withWarmupWhitespace(bars, m.macd));
+      ind.macdSignal.setData(withWarmupWhitespace(bars, m.signal));
+    }
+  }
+
+  applySettingsChange() {
+    this.syncIndicatorSeries();
+    this.recomputeIndicators();
+    this.renderLegend(null);
+  }
+
+  /* ----- 표시 ----- */
+
+  updatePriceBox() {
+    if (this.bars.length === 0) return;
+    const last = this.bars[this.bars.length - 1];
+    const prev = this.bars.length > 1 ? this.bars[this.bars.length - 2] : last;
+    const diff = last.close - prev.close;
+    const pct = prev.close ? (diff / prev.close) * 100 : 0;
+    this.els.price.hidden = false;
+    this.els.last.textContent = this.fmt.format(last.close);
+    this.els.chg.textContent = `${this.fmt.format(Math.abs(diff))} (${Math.abs(pct).toFixed(2)}%)`;
+    this.els.chg.className = `chg ${diff >= 0 ? "up" : "down"}`;
+  }
+
+  maLegendHtml(param) {
+    const parts = [];
+    settings.ma.forEach((m, i) => {
+      const series = this.ind.ma[i];
+      if (!series) return;
+      let value;
+      if (param) {
+        value = param.seriesData.get(series)?.value;
+      } else if (this.bars.length >= m.period) {
+        const data = Indicators.ma(this.bars.slice(-m.period * 3 - 5), m.period, m.type);
+        value = data[data.length - 1]?.value;
+      }
+      if (value === undefined) return;
+      parts.push(
+        `<span class="ind-item"><span class="ind-dot" style="background:${MA_COLORS[i]}"></span>` +
+        `${m.type === "EMA" ? "EMA" : "MA"}${m.period} ${this.fmt.format(value)}</span>`
+      );
+    });
+    return parts.length ? `<span class="ind-values">${parts.join("")}</span>` : "";
+  }
+
+  renderLegend(param) {
+    if (this.bars.length === 0) { this.els.legend.textContent = ""; return; }
+    const bar = param?.time != null ? param.seriesData.get(this.candleSeries) : null;
+    const src = bar ?? candlePoint(this.bars[this.bars.length - 1]);
+    const cls = src.close >= src.open ? "v-up" : "v-down";
+    this.els.legend.innerHTML =
+      `<b>${this.sel.symbol}</b> · ${this.sel.timeframe} &nbsp; ` +
+      `시 <span class="${cls}">${this.fmt.format(src.open)}</span> ` +
+      `고 <span class="${cls}">${this.fmt.format(src.high)}</span> ` +
+      `저 <span class="${cls}">${this.fmt.format(src.low)}</span> ` +
+      `종 <span class="${cls}">${this.fmt.format(src.close)}</span>` +
+      this.maLegendHtml(bar ? param : null);
+  }
+}
+
+/* ---------- 레이아웃 관리 ---------- */
+
+const LAYOUT_KEY = "cmmauto.layout.v1";
+const gridEl = document.getElementById("grid");
+const panels = [];
+let layoutCount = 1;
+
+function defaultSelection(i) {
+  // 새 패널 기본값: 첫 거래소의 i번째 심볼 (없으면 첫 심볼)
+  const exId = Object.keys(meta.exchanges)[0];
+  const symbols = meta.exchanges[exId]?.symbols ?? [];
+  const sel = {
+    exchange: exId,
+    symbol: symbols[i % Math.max(1, symbols.length)] ?? symbols[0] ?? null,
+    timeframe: meta.timeframes.includes("1h") ? "1h" : meta.timeframes[0],
+  };
+  return sel;
+}
+
+function saveLayout() {
+  localStorage.setItem(LAYOUT_KEY, JSON.stringify({
+    layout: layoutCount,
+    panels: panels.map((p) => p.sel),
+  }));
+}
+
+function loadLayoutPref() {
+  try {
+    return JSON.parse(localStorage.getItem(LAYOUT_KEY)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function validSelection(sel) {
+  if (!sel || !meta.exchanges[sel.exchange]) return null;
+  const exMeta = meta.exchanges[sel.exchange];
   return {
-    layout: {
-      background: { type: "solid", color: "#131722" },
-      textColor: "#787b86",
-      fontSize: 12,
-    },
-    grid: {
-      vertLines: { color: "#1e222d" },
-      horzLines: { color: "#1e222d" },
-    },
-    crosshair: {
-      mode: LightweightCharts.CrosshairMode.Normal,
-      vertLine: { color: "#4c525e", labelBackgroundColor: "#2a2e39" },
-      horzLine: { color: "#4c525e", labelBackgroundColor: "#2a2e39" },
-    },
-    rightPriceScale: { borderColor: "#2a2e39", minimumWidth: PRICE_SCALE_WIDTH },
-    timeScale: { borderColor: "#2a2e39", timeVisible: true, secondsVisible: false },
-    localization: { locale: "ko-KR" },
+    exchange: sel.exchange,
+    symbol: exMeta.symbols.includes(sel.symbol) ? sel.symbol : exMeta.symbols[0],
+    timeframe: meta.timeframes.includes(sel.timeframe) ? sel.timeframe : meta.timeframes[0],
   };
 }
 
-const chart = LightweightCharts.createChart(document.getElementById("chart"), baseChartOptions());
+function setLayout(n, savedSelections = []) {
+  layoutCount = n;
+  gridEl.dataset.layout = String(n);
+  // 초과 패널 제거
+  while (panels.length > n) {
+    panels.pop().destroy();
+  }
+  // 부족 패널 추가
+  while (panels.length < n) {
+    const i = panels.length;
+    const sel = validSelection(savedSelections[i]) ?? defaultSelection(i);
+    panels.push(new ChartPanel(gridEl, sel));
+  }
+  for (const btn of document.querySelectorAll("#layout-group button")) {
+    btn.classList.toggle("active", Number(btn.dataset.layout) === n);
+  }
+  saveLayout();
+}
 
-// 서브 패널은 메인 차트의 시간 범위를 따라가는 수동 디스플레이 (직접 스크롤/줌 불가)
-const subChartOptions = () => ({
-  ...baseChartOptions(),
-  timeScale: { borderColor: "#2a2e39", timeVisible: true, secondsVisible: false, visible: false },
-  handleScroll: false,
-  handleScale: false,
+document.getElementById("layout-group").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-layout]");
+  if (!btn) return;
+  setLayout(Number(btn.dataset.layout));
 });
 
-const rsiChart = LightweightCharts.createChart(document.getElementById("rsi-chart"), subChartOptions());
-const macdChart = LightweightCharts.createChart(document.getElementById("macd-chart"), subChartOptions());
+/* ---------- 지표 설정 패널 (전 패널 공통) ---------- */
 
-const candleSeries = chart.addCandlestickSeries({
-  upColor: UP, downColor: DOWN,
-  wickUpColor: UP, wickDownColor: DOWN,
-  borderVisible: false,
-});
-
-const volumeSeries = chart.addHistogramSeries({
-  priceScaleId: "volume",
-  priceFormat: { type: "volume" },
-  lastValueVisible: false,
-  priceLineVisible: false,
-});
-chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
-
-// 지표 시리즈는 설정에 따라 생성/제거한다
-const ind = {
-  ma: [null, null, null, null],
-  envUpper: null, envLower: null,
-  bbUpper: null, bbMiddle: null, bbLower: null,
-  rsi: null,
-  macdLine: null, macdSignal: null, macdHist: null,
-};
-
-for (const [paneId, paneChart] of [["main-pane", chart], ["rsi-pane", rsiChart], ["macd-pane", macdChart]]) {
-  const el = document.getElementById(paneId);
-  new ResizeObserver(() => paneChart.resize(el.clientWidth, el.clientHeight)).observe(el);
-}
-
-// 시간축 동기화: 메인 → 서브 단방향.
-// (range 이벤트가 비동기로 발생하므로 양방향 동기화는 setData 시
-//  서브 패널의 초기 범위가 메인으로 역전파되는 문제를 일으킨다)
-function pushRangeToSubs() {
-  const r = chart.timeScale().getVisibleLogicalRange();
-  if (!r) return;
-  rsiChart.timeScale().setVisibleLogicalRange(r);
-  macdChart.timeScale().setVisibleLogicalRange(r);
-}
-chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-  if (!range) return;
-  rsiChart.timeScale().setVisibleLogicalRange(range);
-  macdChart.timeScale().setVisibleLogicalRange(range);
-});
-
-/* ---------- 유틸 ---------- */
-
-async function api(path) {
-  const res = await fetch(path);
-  if (!res.ok) throw new Error(`${path} → HTTP ${res.status}`);
-  return res.json();
-}
-
-function candlePoint(b) {
-  return { time: b.time, open: b.open, high: b.high, low: b.low, close: b.close };
-}
-
-function volumePoint(b) {
-  const up = b.close >= b.open;
-  return { time: b.time, value: b.volume, color: up ? "rgba(38,166,154,0.45)" : "rgba(239,83,80,0.45)" };
-}
-
-// 데이터에 맞는 소수 자릿수 추정 (KRW 정수가·소액 알트코인 모두 대응)
-// 실제 표기 자릿수와 가격 크기 기반 상한 중 작은 쪽을 쓴다.
-function inferPrecision(bars) {
-  if (bars.length === 0) return 2;
-  let seen = 0;
-  for (const b of bars.slice(-80)) {
-    const s = String(b.close);
-    const i = s.indexOf(".");
-    if (i >= 0) seen = Math.max(seen, Math.min(8, s.length - i - 1));
-  }
-  const price = Math.abs(bars[bars.length - 1].close);
-  const cap = price >= 1000 ? 2 : price >= 1 ? 4 : 8;
-  return Math.min(seen, cap);
-}
-
-const numFmt = (precision) =>
-  new Intl.NumberFormat("ko-KR", { minimumFractionDigits: 0, maximumFractionDigits: precision });
-
-let fmt = numFmt(2);
-
-/* ---------- 지표 시리즈 생성/제거 및 재계산 ---------- */
-
-const lineDefaults = {
-  lineWidth: 1,
-  priceLineVisible: false,
-  lastValueVisible: false,
-  crosshairMarkerVisible: false,
-};
-
-function addLine(target, color, extra = {}) {
-  return target.addLineSeries({ ...lineDefaults, color, ...extra });
-}
-
-function removeSeries(target, key) {
-  if (ind[key]) {
-    target.removeSeries(ind[key]);
-    ind[key] = null;
-  }
-}
-
-/** 설정에 맞게 시리즈를 만들거나 제거하고 서브 패널 표시를 갱신한다 */
-function syncIndicatorSeries() {
-  // 이동평균선
-  settings.ma.forEach((m, i) => {
-    if (m.on && !ind.ma[i]) ind.ma[i] = addLine(chart, MA_COLORS[i], { lineWidth: 2 });
-    if (!m.on && ind.ma[i]) { chart.removeSeries(ind.ma[i]); ind.ma[i] = null; }
-  });
-
-  // Envelope
-  if (settings.envelope.on) {
-    if (!ind.envUpper) ind.envUpper = addLine(chart, BAND_COLOR, { lineStyle: LightweightCharts.LineStyle.Dashed });
-    if (!ind.envLower) ind.envLower = addLine(chart, BAND_COLOR, { lineStyle: LightweightCharts.LineStyle.Dashed });
-  } else {
-    removeSeries(chart, "envUpper");
-    removeSeries(chart, "envLower");
-  }
-
-  // 볼린저밴드
-  if (settings.bollinger.on) {
-    if (!ind.bbUpper) ind.bbUpper = addLine(chart, BAND_COLOR, { lineStyle: LightweightCharts.LineStyle.Dotted });
-    if (!ind.bbMiddle) ind.bbMiddle = addLine(chart, BAND_COLOR);
-    if (!ind.bbLower) ind.bbLower = addLine(chart, BAND_COLOR, { lineStyle: LightweightCharts.LineStyle.Dotted });
-  } else {
-    removeSeries(chart, "bbUpper");
-    removeSeries(chart, "bbMiddle");
-    removeSeries(chart, "bbLower");
-  }
-
-  // 거래량
-  volumeSeries.applyOptions({ visible: settings.volume.on });
-
-  // RSI 서브 패널
-  els.rsiPane.hidden = !settings.rsi.on;
-  if (settings.rsi.on) {
-    if (!ind.rsi) {
-      ind.rsi = addLine(rsiChart, "#8b5cf6", { lineWidth: 2, lastValueVisible: true });
-      ind.rsi.createPriceLine({ price: 70, color: "#4c525e", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: false });
-      ind.rsi.createPriceLine({ price: 30, color: "#4c525e", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: false });
-    }
-    els.rsiLabel.textContent = `RSI ${settings.rsi.period}`;
-  } else {
-    removeSeries(rsiChart, "rsi");
-  }
-
-  // MACD 서브 패널
-  els.macdPane.hidden = !settings.macd.on;
-  if (settings.macd.on) {
-    if (!ind.macdHist) {
-      ind.macdHist = macdChart.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false });
-      ind.macdLine = addLine(macdChart, "#3b82f6", { lineWidth: 2, lastValueVisible: true });
-      ind.macdSignal = addLine(macdChart, "#d97706", { lineWidth: 1 });
-    }
-    els.macdLabel.textContent = `MACD ${settings.macd.fast},${settings.macd.slow},${settings.macd.signal}`;
-  } else {
-    removeSeries(macdChart, "macdHist");
-    removeSeries(macdChart, "macdLine");
-    removeSeries(macdChart, "macdSignal");
-  }
-
-  // 시간축은 가장 아래에 보이는 패널에만 표시
-  const lowest = settings.macd.on ? "macd" : settings.rsi.on ? "rsi" : "main";
-  chart.timeScale().applyOptions({ visible: lowest === "main" });
-  rsiChart.timeScale().applyOptions({ visible: lowest === "rsi" });
-  macdChart.timeScale().applyOptions({ visible: lowest === "macd" });
-}
-
-/** 현재 캔들 데이터로 활성 지표를 전부 다시 계산해 시리즈에 반영한다.
- * setData 후 서브 패널의 범위가 초기화될 수 있으므로 메인 범위를 다시 밀어준다. */
-function recomputeIndicators() {
-  try {
-    recomputeIndicatorsInner();
-  } finally {
-    // 첫 setData 시 서브 차트가 자체적으로 "전체 보기"로 초기화하는 동작이
-    // 비동기로 늦게 적용될 수 있어, 즉시 + 다음 프레임에 한 번 더 맞춘다.
-    pushRangeToSubs();
-    requestAnimationFrame(pushRangeToSubs);
-  }
-}
-
-/** 서브 패널 시리즈용: 지표 워밍업 구간을 whitespace 포인트로 채워
- * 메인 차트와 데이터 포인트 수(논리 인덱스)를 1:1로 맞춘다. */
-function withWarmupWhitespace(bars, points) {
-  if (points.length === 0) return points;
-  const first = points[0].time;
-  const pad = [];
-  for (const b of bars) {
-    if (b.time >= first) break;
-    pad.push({ time: b.time });
-  }
-  return pad.concat(points);
-}
-
-function recomputeIndicatorsInner() {
-  const bars = state.bars;
-  settings.ma.forEach((m, i) => {
-    if (ind.ma[i]) ind.ma[i].setData(bars.length ? Indicators.ma(bars, m.period, m.type) : []);
-  });
-  if (ind.envUpper) {
-    const env = bars.length ? Indicators.envelope(bars, settings.envelope.period, settings.envelope.percent) : { upper: [], lower: [] };
-    ind.envUpper.setData(env.upper);
-    ind.envLower.setData(env.lower);
-  }
-  if (ind.bbUpper) {
-    const bb = bars.length ? Indicators.bollinger(bars, settings.bollinger.period, settings.bollinger.mult) : { upper: [], middle: [], lower: [] };
-    ind.bbUpper.setData(bb.upper);
-    ind.bbMiddle.setData(bb.middle);
-    ind.bbLower.setData(bb.lower);
-  }
-  if (ind.rsi) {
-    ind.rsi.setData(bars.length ? withWarmupWhitespace(bars, Indicators.rsi(bars, settings.rsi.period)) : []);
-  }
-  if (ind.macdHist) {
-    const m = bars.length
-      ? Indicators.macd(bars, settings.macd.fast, settings.macd.slow, settings.macd.signal, "rgba(38,166,154,0.5)", "rgba(239,83,80,0.5)")
-      : { macd: [], signal: [], hist: [] };
-    ind.macdHist.setData(withWarmupWhitespace(bars, m.hist));
-    ind.macdLine.setData(withWarmupWhitespace(bars, m.macd));
-    ind.macdSignal.setData(withWarmupWhitespace(bars, m.signal));
-  }
-}
+const indicatorBtn = document.getElementById("indicator-btn");
+const indicatorPanel = document.getElementById("indicator-panel");
 
 function applyIndicatorSettings() {
   saveSettings();
-  syncIndicatorSeries();
-  recomputeIndicators();
-  renderLegend(null);
+  for (const p of panels) p.applySettingsChange();
 }
-
-/* ---------- 데이터 로드 ---------- */
-
-function candlesUrl(extra = "") {
-  const { exchange, symbol, timeframe } = state;
-  return `/api/candles?exchange=${encodeURIComponent(exchange)}&symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}${extra}`;
-}
-
-async function loadInitial() {
-  const token = ++state.loadToken;
-  state.bars = [];
-  state.hasMoreHistory = true;
-  candleSeries.setData([]);
-  volumeSeries.setData([]);
-  recomputeIndicators();
-  els.priceBox.hidden = true;
-  els.legend.textContent = "";
-
-  const data = await api(candlesUrl(`&limit=${PAGE_SIZE}`));
-  if (token !== state.loadToken) return; // 선택이 바뀌었으면 폐기
-
-  state.bars = data.candles;
-  state.hasMoreHistory = data.candles.length >= PAGE_SIZE;
-  els.emptyHint.hidden = state.bars.length > 0;
-
-  const precision = inferPrecision(state.bars);
-  fmt = numFmt(precision);
-  candleSeries.applyOptions({
-    priceFormat: { type: "price", precision, minMove: precision ? Math.pow(10, -precision) : 1 },
-  });
-
-  candleSeries.setData(state.bars.map(candlePoint));
-  volumeSeries.setData(state.bars.map(volumePoint));
-  recomputeIndicators();
-  // 최근 150봉만 보이게 시작 (전체를 펼치면 왼쪽 끝에 닿아 과거 로드가 연쇄됨)
-  chart.timeScale().setVisibleLogicalRange({
-    from: Math.max(0, state.bars.length - 150),
-    to: state.bars.length + 5,
-  });
-  updatePriceBox();
-  renderLegend(null);
-}
-
-async function loadOlder() {
-  if (state.loadingOlder || !state.hasMoreHistory || state.bars.length === 0) return;
-  state.loadingOlder = true;
-  const token = state.loadToken;
-  try {
-    const oldest = state.bars[0].time;
-    const data = await api(candlesUrl(`&limit=${PAGE_SIZE}&before=${oldest}`));
-    if (token !== state.loadToken) return;
-    if (data.candles.length === 0) {
-      state.hasMoreHistory = false;
-      return;
-    }
-    state.bars = data.candles.concat(state.bars);
-    state.hasMoreHistory = data.candles.length >= PAGE_SIZE;
-    candleSeries.setData(state.bars.map(candlePoint));
-    volumeSeries.setData(state.bars.map(volumePoint));
-    recomputeIndicators();
-  } finally {
-    state.loadingOlder = false;
-  }
-}
-
-chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-  if (range && range.from < 15) loadOlder();
-});
-
-async function pollLive() {
-  if (!state.exchange || state.bars.length === 0) return;
-  const token = state.loadToken;
-  try {
-    const data = await api(candlesUrl("&limit=3"));
-    if (token !== state.loadToken || data.candles.length === 0) return;
-    const lastKnown = state.bars[state.bars.length - 1].time;
-    let changed = false;
-    for (const b of data.candles) {
-      if (b.time < lastKnown) continue;
-      if (b.time === lastKnown) {
-        state.bars[state.bars.length - 1] = b;
-      } else {
-        state.bars.push(b);
-      }
-      candleSeries.update(candlePoint(b));
-      volumeSeries.update(volumePoint(b));
-      changed = true;
-    }
-    if (changed) recomputeIndicators();
-    els.emptyHint.hidden = true;
-    updatePriceBox();
-  } catch {
-    /* 일시적 네트워크 오류는 다음 폴링에서 회복 */
-  }
-}
-
-/* ---------- 툴바 ---------- */
-
-function exchangeMeta() {
-  return state.meta?.exchanges?.[state.exchange];
-}
-
-function renderExchangeOptions() {
-  els.exchange.innerHTML = "";
-  for (const exId of Object.keys(state.meta.exchanges)) {
-    const opt = document.createElement("option");
-    opt.value = exId;
-    opt.textContent = exId;
-    els.exchange.appendChild(opt);
-  }
-  els.exchange.value = state.exchange;
-}
-
-function renderSymbolOptions() {
-  els.symbol.innerHTML = "";
-  for (const sym of exchangeMeta()?.symbols ?? []) {
-    const opt = document.createElement("option");
-    opt.value = sym;
-    opt.textContent = sym;
-    els.symbol.appendChild(opt);
-  }
-  els.symbol.value = state.symbol;
-}
-
-function renderTimeframes() {
-  els.tfGroup.innerHTML = "";
-  const supported = new Set(exchangeMeta()?.status?.timeframes ?? state.meta.timeframes);
-  for (const tf of state.meta.timeframes) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.textContent = tf;
-    btn.disabled = !supported.has(tf);
-    btn.classList.toggle("active", tf === state.timeframe);
-    btn.addEventListener("click", () => {
-      state.timeframe = tf;
-      renderTimeframes();
-      loadInitial();
-    });
-    els.tfGroup.appendChild(btn);
-  }
-}
-
-function firstSupportedTimeframe() {
-  const supported = new Set(exchangeMeta()?.status?.timeframes ?? state.meta.timeframes);
-  if (supported.has(state.timeframe)) return state.timeframe;
-  return state.meta.timeframes.find((tf) => supported.has(tf)) ?? state.meta.timeframes[0];
-}
-
-els.exchange.addEventListener("change", () => {
-  state.exchange = els.exchange.value;
-  state.symbol = exchangeMeta()?.symbols?.[0] ?? null;
-  state.timeframe = firstSupportedTimeframe();
-  renderSymbolOptions();
-  renderTimeframes();
-  loadInitial();
-});
-
-els.symbol.addEventListener("change", () => {
-  state.symbol = els.symbol.value;
-  loadInitial();
-});
-
-/* ---------- 지표 설정 패널 ---------- */
 
 function numberInput(value, min, max, step, onChange) {
   const input = document.createElement("input");
@@ -543,10 +718,8 @@ function checkboxLabel(text, checked, onChange) {
 }
 
 function buildIndicatorPanel() {
-  const panel = els.indicatorPanel;
-  panel.innerHTML = "";
+  indicatorPanel.innerHTML = "";
 
-  // 이동평균선
   const maSection = document.createElement("div");
   maSection.className = "ind-section";
   maSection.innerHTML = `<div class="ind-title">이동평균선</div>`;
@@ -574,9 +747,8 @@ function buildIndicatorPanel() {
     row.appendChild(sub);
     maSection.appendChild(row);
   });
-  panel.appendChild(maSection);
+  indicatorPanel.appendChild(maSection);
 
-  // Envelope
   const envSection = document.createElement("div");
   envSection.className = "ind-section";
   const envRow = document.createElement("div");
@@ -589,9 +761,8 @@ function buildIndicatorPanel() {
   const envSub2 = document.createElement("span"); envSub2.className = "sub"; envSub2.textContent = "%";
   envRow.appendChild(envSub2);
   envSection.appendChild(envRow);
-  panel.appendChild(envSection);
+  indicatorPanel.appendChild(envSection);
 
-  // 볼린저밴드
   const bbSection = document.createElement("div");
   bbSection.className = "ind-section";
   const bbRow = document.createElement("div");
@@ -604,18 +775,16 @@ function buildIndicatorPanel() {
   const bbSub2 = document.createElement("span"); bbSub2.className = "sub"; bbSub2.textContent = "승수";
   bbRow.appendChild(bbSub2);
   bbSection.appendChild(bbRow);
-  panel.appendChild(bbSection);
+  indicatorPanel.appendChild(bbSection);
 
-  // 거래량
   const volSection = document.createElement("div");
   volSection.className = "ind-section";
   const volRow = document.createElement("div");
   volRow.className = "ind-row";
   volRow.appendChild(checkboxLabel("거래량", settings.volume.on, (v) => { settings.volume.on = v; applyIndicatorSettings(); }));
   volSection.appendChild(volRow);
-  panel.appendChild(volSection);
+  indicatorPanel.appendChild(volSection);
 
-  // RSI
   const rsiSection = document.createElement("div");
   rsiSection.className = "ind-section";
   const rsiRow = document.createElement("div");
@@ -625,9 +794,8 @@ function buildIndicatorPanel() {
   const rsiSub = document.createElement("span"); rsiSub.className = "sub"; rsiSub.textContent = "기간";
   rsiRow.appendChild(rsiSub);
   rsiSection.appendChild(rsiRow);
-  panel.appendChild(rsiSection);
+  indicatorPanel.appendChild(rsiSection);
 
-  // MACD
   const macdSection = document.createElement("div");
   macdSection.className = "ind-section";
   const macdRow = document.createElement("div");
@@ -639,9 +807,8 @@ function buildIndicatorPanel() {
   const macdSub = document.createElement("span"); macdSub.className = "sub"; macdSub.textContent = "단기·장기·시그널";
   macdRow.appendChild(macdSub);
   macdSection.appendChild(macdRow);
-  panel.appendChild(macdSection);
+  indicatorPanel.appendChild(macdSection);
 
-  // 초기화
   const reset = document.createElement("button");
   reset.type = "button";
   reset.className = "ind-reset";
@@ -651,127 +818,76 @@ function buildIndicatorPanel() {
     applyIndicatorSettings();
     buildIndicatorPanel();
   });
-  panel.appendChild(reset);
+  indicatorPanel.appendChild(reset);
 }
 
-els.indicatorBtn.addEventListener("click", (e) => {
+indicatorBtn.addEventListener("click", (e) => {
   e.stopPropagation();
-  const open = els.indicatorPanel.hidden;
-  els.indicatorPanel.hidden = !open;
-  els.indicatorBtn.classList.toggle("open", open);
-  els.indicatorBtn.setAttribute("aria-expanded", String(open));
+  const open = indicatorPanel.hidden;
+  indicatorPanel.hidden = !open;
+  indicatorBtn.classList.toggle("open", open);
+  indicatorBtn.setAttribute("aria-expanded", String(open));
 });
-els.indicatorPanel.addEventListener("click", (e) => e.stopPropagation());
+indicatorPanel.addEventListener("click", (e) => e.stopPropagation());
 document.addEventListener("click", () => {
-  if (!els.indicatorPanel.hidden) {
-    els.indicatorPanel.hidden = true;
-    els.indicatorBtn.classList.remove("open");
-    els.indicatorBtn.setAttribute("aria-expanded", "false");
+  if (!indicatorPanel.hidden) {
+    indicatorPanel.hidden = true;
+    indicatorBtn.classList.remove("open");
+    indicatorBtn.setAttribute("aria-expanded", "false");
   }
 });
 
-/* ---------- 가격/상태/범례 표시 ---------- */
+/* ---------- 수집기 상태 표시 ---------- */
 
-function updatePriceBox() {
-  if (state.bars.length === 0) return;
-  const last = state.bars[state.bars.length - 1];
-  const prev = state.bars.length > 1 ? state.bars[state.bars.length - 2] : last;
-  const diff = last.close - prev.close;
-  const pct = prev.close ? (diff / prev.close) * 100 : 0;
-  els.priceBox.hidden = false;
-  els.lastPrice.textContent = fmt.format(last.close);
-  els.priceChange.textContent = `${fmt.format(Math.abs(diff))} (${Math.abs(pct).toFixed(2)}%)`;
-  els.priceChange.className = `price-change ${diff >= 0 ? "up" : "down"}`;
-  document.title = `${fmt.format(last.close)} · ${state.symbol} · ${state.exchange} — cmmAuto`;
-}
-
-/** 십자선 위치의 이동평균 값 표시용: param이 없으면 마지막 값 사용 */
-function maLegendHtml(param) {
-  const parts = [];
-  settings.ma.forEach((m, i) => {
-    const series = ind.ma[i];
-    if (!series) return;
-    let value;
-    if (param) {
-      value = param.seriesData.get(series)?.value;
-    } else {
-      const bars = state.bars;
-      if (bars.length >= m.period) {
-        const data = Indicators.ma(bars.slice(-m.period * 3 - 5), m.period, m.type);
-        value = data[data.length - 1]?.value;
-      }
-    }
-    if (value === undefined) return;
-    parts.push(
-      `<span class="ind-item"><span class="ind-dot" style="background:${MA_COLORS[i]}"></span>` +
-      `${m.type === "EMA" ? "EMA" : "MA"}${m.period} ${fmt.format(value)}</span>`
-    );
-  });
-  return parts.length ? `<span class="ind-values">${parts.join("")}</span>` : "";
-}
-
-function renderLegend(param) {
-  if (state.bars.length === 0) { els.legend.textContent = ""; return; }
-  const bar = param?.time != null ? param.seriesData.get(candleSeries) : null;
-  const src = bar ?? candlePoint(state.bars[state.bars.length - 1]);
-  const cls = src.close >= src.open ? "v-up" : "v-down";
-  els.legend.innerHTML =
-    `<b>${state.symbol}</b> · ${state.timeframe} &nbsp; ` +
-    `시 <span class="${cls}">${fmt.format(src.open)}</span> ` +
-    `고 <span class="${cls}">${fmt.format(src.high)}</span> ` +
-    `저 <span class="${cls}">${fmt.format(src.low)}</span> ` +
-    `종 <span class="${cls}">${fmt.format(src.close)}</span>` +
-    maLegendHtml(bar ? param : null);
-}
-
-chart.subscribeCrosshairMove((param) => {
-  renderLegend(param?.time != null ? param : null);
-});
+const statusDot = document.getElementById("status-dot");
+const statusText = document.getElementById("status-text");
 
 async function refreshMeta() {
   try {
-    state.meta = await api("/api/meta");
+    meta = await api("/api/meta");
   } catch {
-    els.statusDot.className = "dot dot-error";
-    els.statusText.textContent = "서버 연결 끊김";
+    statusDot.className = "dot dot-error";
+    statusText.textContent = "서버 연결 끊김";
     return;
   }
-  const st = exchangeMeta()?.status ?? {};
-  if (st.last_error) {
-    els.statusDot.className = "dot dot-error";
-    els.statusText.textContent = `수집 오류: ${st.last_error}`.slice(0, 80);
-  } else if (st.last_sync) {
-    const ago = Math.max(0, state.meta.server_time - st.last_sync);
-    els.statusDot.className = "dot dot-ok";
-    els.statusText.textContent = `동기화 ${ago}s 전`;
+  // 전체 거래소를 요약: 오류가 하나라도 있으면 표시, 아니면 최근 동기화 시각
+  let error = null;
+  let lastSync = null;
+  for (const [exId, ex] of Object.entries(meta.exchanges)) {
+    const st = ex.status ?? {};
+    if (st.last_error && !error) error = `${exId}: ${st.last_error}`;
+    if (st.last_sync) lastSync = Math.max(lastSync ?? 0, st.last_sync);
+  }
+  if (error) {
+    statusDot.className = "dot dot-error";
+    statusText.textContent = `수집 오류 — ${error}`.slice(0, 90);
+  } else if (lastSync) {
+    const ago = Math.max(0, meta.server_time - lastSync);
+    statusDot.className = "dot dot-ok";
+    statusText.textContent = `동기화 ${ago}s 전`;
   } else {
-    els.statusDot.className = "dot dot-unknown";
-    els.statusText.textContent = "첫 수집 진행 중…";
+    statusDot.className = "dot dot-unknown";
+    statusText.textContent = "첫 수집 진행 중…";
   }
 }
 
 /* ---------- 부트스트랩 ---------- */
 
 async function init() {
-  state.meta = await api("/api/meta");
-  const exchangeIds = Object.keys(state.meta.exchanges);
-  state.exchange = exchangeIds[0] ?? null;
-  state.symbol = exchangeMeta()?.symbols?.[0] ?? null;
-  state.timeframe = firstSupportedTimeframe();
-
-  renderExchangeOptions();
-  renderSymbolOptions();
-  renderTimeframes();
+  meta = await api("/api/meta");
   buildIndicatorPanel();
-  syncIndicatorSeries();
-  await refreshMeta();
-  await loadInitial();
 
-  setInterval(pollLive, LIVE_POLL_MS);
+  const saved = loadLayoutPref();
+  const n = Math.min(MAX_PANELS, Math.max(1, saved?.layout ?? 1));
+  setLayout(n, saved?.panels ?? []);
+
+  await refreshMeta();
+
+  setInterval(() => { for (const p of panels) p.pollLive(); }, LIVE_POLL_MS);
   setInterval(refreshMeta, META_POLL_MS);
 }
 
 init().catch((e) => {
-  els.statusDot.className = "dot dot-error";
-  els.statusText.textContent = `초기화 실패: ${e.message}`;
+  statusDot.className = "dot dot-error";
+  statusText.textContent = `초기화 실패: ${e.message}`;
 });

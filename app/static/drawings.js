@@ -17,6 +17,7 @@ const DRAW_UP = "rgba(38, 166, 154, 0.18)";
 const DRAW_DOWN = "rgba(239, 83, 80, 0.18)";
 const HIT_PX = 7;      // 선택 판정 거리
 const HANDLE_R = 5;    // 끝점 핸들 반지름
+const ALERT_COOLDOWN_MS = 60_000; // 같은 도형의 연속 알림 최소 간격
 
 class DrawingLayer {
   /**
@@ -37,9 +38,39 @@ class DrawingLayer {
     this.destroyed = false;
     this._suppressClick = false;
 
+    this._alertState = new Map(); // id → {side, lastFired} (런타임 전용)
+
     this.canvas = document.createElement("canvas");
     this.canvas.className = "draw-overlay";
     this.container.appendChild(this.canvas);
+
+    // 선택된 도형 옆에 뜨는 미니 툴바 (알림 토글 · 삭제)
+    this.toolbar = document.createElement("div");
+    this.toolbar.className = "draw-toolbar";
+    this.toolbar.hidden = true;
+    this.alertBtn = document.createElement("button");
+    this.alertBtn.type = "button";
+    this.delBtn = document.createElement("button");
+    this.delBtn.type = "button";
+    this.delBtn.textContent = "삭제";
+    this.toolbar.appendChild(this.alertBtn);
+    this.toolbar.appendChild(this.delBtn);
+    this.container.appendChild(this.toolbar);
+    this.toolbar.addEventListener("click", (e) => e.stopPropagation());
+    this.alertBtn.addEventListener("click", () => {
+      const d = this.drawings.find((x) => x.id === this.selectedId);
+      if (!d) return;
+      d.alert = !d.alert;
+      this._alertState.delete(d.id);
+      this.onAlertToggle?.(d);
+      this.onChange?.(this.getDrawings());
+    });
+    this.delBtn.addEventListener("click", () => {
+      this.drawings = this.drawings.filter((d) => d.id !== this.selectedId);
+      this.selectedId = null;
+      this._updatePointerMode();
+      this.onChange?.(this.getDrawings());
+    });
 
     this.ro = new ResizeObserver(() => this._resize());
     this.ro.observe(this.container);
@@ -71,13 +102,51 @@ class DrawingLayer {
     this.container.removeEventListener("click", this._onContainerClick);
     document.removeEventListener("keydown", this._onKeyDown);
     this.canvas.remove();
+    this.toolbar.remove();
   }
 
   setDrawings(arr) {
     this.drawings = Array.isArray(arr) ? structuredClone(arr) : [];
     this.selectedId = null;
     this.pending = null;
+    this._alertState.clear();
     this._updatePointerMode();
+  }
+
+  /* ---------- 알림 ---------- */
+
+  /** t(초) 시점의 선 가격. 알림 대상이 아니거나 계산 불가면 null */
+  _lineValueAt(d, t) {
+    if (d.type === "hline") return d.p1.p;
+    if (d.type === "trend" && d.p2) {
+      const t1 = d.p1.t, t2 = d.p2.t;
+      if (t1 === t2) return null;
+      if (t < Math.min(t1, t2)) return null; // 시작 전에는 비활성
+      // 구간 오른쪽으로는 연장선으로 계산
+      return d.p1.p + ((d.p2.p - d.p1.p) * (t - t1)) / (t2 - t1);
+    }
+    return null;
+  }
+
+  /** 최신 가격으로 알림 도형들을 평가한다. 교차(돌파)가 생기면 배열로 반환 */
+  evaluateAlerts(price, t) {
+    const out = [];
+    const now = Date.now();
+    for (const d of this.drawings) {
+      if (!d.alert) continue;
+      const v = this._lineValueAt(d, t);
+      if (v === null) continue;
+      const side = price > v ? 1 : price < v ? -1 : 0;
+      if (side === 0) continue;
+      const st = this._alertState.get(d.id) ?? { side: 0, lastFired: 0 };
+      if (st.side !== 0 && side !== st.side && now - st.lastFired > ALERT_COOLDOWN_MS) {
+        out.push({ drawing: d, value: v, price, direction: side });
+        st.lastFired = now;
+      }
+      st.side = side;
+      this._alertState.set(d.id, st);
+    }
+    return out;
   }
 
   getDrawings() {
@@ -347,6 +416,28 @@ class DrawingLayer {
       const a = this._anchorAt(this.mouse.x, this.mouse.y);
       if (a) this._renderDrawing(ctx, { ...this.pending, p2: a, id: "__pending__" }, false, true);
     }
+    this._updateToolbar();
+  }
+
+  _updateToolbar() {
+    const sel = this.selectedId !== null ? this.drawings.find((d) => d.id === this.selectedId) : null;
+    const c = sel ? this._coords(sel) : null;
+    if (!sel || !c) {
+      this.toolbar.hidden = true;
+      return;
+    }
+    this.alertBtn.hidden = sel.type === "range"; // 범위 측정에는 알림 없음
+    this.alertBtn.textContent = sel.alert ? "🔔 알림 끄기" : "🔕 알림 켜기";
+    this.alertBtn.classList.toggle("on", !!sel.alert);
+    this.toolbar.hidden = false;
+    const midX = (c.x1 + c.x2) / 2;
+    const midY = (c.y1 + c.y2) / 2;
+    const w = this.toolbar.offsetWidth || 140;
+    const h = this.toolbar.offsetHeight || 26;
+    const x = Math.max(4, Math.min(this.canvas.clientWidth - w - 4, midX - w / 2));
+    const y = Math.max(4, Math.min(this.canvas.clientHeight - h - 4, midY - h - 12));
+    this.toolbar.style.left = `${x}px`;
+    this.toolbar.style.top = `${y}px`;
   }
 
   _renderDrawing(ctx, d, selected, preview = false) {
@@ -373,6 +464,15 @@ class DrawingLayer {
       ctx.lineTo(c.x2, c.y2);
       ctx.stroke();
       if (d.type === "hline") this._renderHlineLabel(ctx, d, c);
+      if (d.alert) {
+        // 알림이 걸린 선에는 종 아이콘 표시
+        ctx.font = "12px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "bottom";
+        const bx = d.type === "hline" ? 60 : Math.max(c.x1, c.x2);
+        const by = d.type === "hline" ? c.y1 - 3 : (c.x1 > c.x2 ? c.y1 : c.y2) - 6;
+        ctx.fillText("🔔", bx, by);
+      }
     }
 
     if (selected) {

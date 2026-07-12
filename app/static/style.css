@@ -319,3 +319,59 @@ select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   pointer-events: none;
 }
 .draw-group button.active { background: var(--accent); color: #fff; }
+
+/* 선택된 도형 옆 미니 툴바 */
+.draw-toolbar {
+  position: absolute;
+  z-index: 6;
+  display: flex;
+  gap: 4px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+.draw-toolbar button {
+  background: transparent;
+  color: var(--text);
+  border: none;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.draw-toolbar button:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.draw-toolbar button.on { color: var(--accent); }
+
+/* ---------- 알림 토스트 ---------- */
+
+.toast-wrap {
+  position: fixed;
+  top: 52px;
+  right: 14px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 340px;
+}
+.toast {
+  background: var(--surface-raised);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 10px 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  animation: toast-in 0.25s ease-out;
+}
+.toast b { display: block; font-size: 13.5px; margin-bottom: 2px; }
+.toast span { font-size: 12.5px; color: var(--text-muted); }
+@keyframes toast-in {
+  from { transform: translateX(30px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast { animation: none; }
+}

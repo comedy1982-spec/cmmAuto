@@ -110,6 +110,65 @@ const lineDefaults = {
   crosshairMarkerVisible: false,
 };
 
+/* ---------- 가격 알림 (토스트 + 알림음 + 브라우저 알림) ---------- */
+
+const toastWrap = document.createElement("div");
+toastWrap.className = "toast-wrap";
+document.body.appendChild(toastWrap);
+
+function showToast(title, body) {
+  const el = document.createElement("div");
+  el.className = "toast";
+  const b = document.createElement("b");
+  b.textContent = title;
+  const s = document.createElement("span");
+  s.textContent = body;
+  el.appendChild(b);
+  el.appendChild(s);
+  el.addEventListener("click", () => el.remove());
+  toastWrap.appendChild(el);
+  setTimeout(() => el.remove(), 10_000);
+}
+
+let audioCtx = null;
+function ensureAudio() {
+  // AudioContext는 사용자 제스처(알림 토글 클릭) 시점에 만들어야 재생이 허용된다
+  try {
+    audioCtx ??= new (window.AudioContext || window.webkitAudioContext)();
+    audioCtx.resume();
+  } catch { /* 소리 미지원 환경 */ }
+}
+
+function beep() {
+  if (!audioCtx) return;
+  try {
+    const t0 = audioCtx.currentTime;
+    for (const [freq, delay] of [[880, 0], [1175, 0.18]]) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.12, t0 + delay);
+      gain.gain.exponentialRampToValueAtTime(0.001, t0 + delay + 0.25);
+      osc.start(t0 + delay);
+      osc.stop(t0 + delay + 0.3);
+    }
+  } catch { /* ignore */ }
+}
+
+function fireLineAlert(panel, trig) {
+  const typeName = trig.drawing.type === "hline" ? "수평선" : "추세선";
+  const dir = trig.direction > 0 ? "상향 돌파" : "하향 돌파";
+  const title = `${panel.sel.symbol} ${typeName} ${dir}`;
+  const body = `현재가 ${panel.fmt.format(trig.price)} · 기준 ${panel.fmt.format(trig.value)} (${panel.sel.exchange} · ${panel.sel.timeframe})`;
+  showToast(title, body);
+  beep();
+  if ("Notification" in window && Notification.permission === "granted") {
+    try { new Notification(title, { body }); } catch { /* ignore */ }
+  }
+}
+
 /* ---------- 지표 설정 (패널별 독립) ---------- */
 
 const LEGACY_SETTINGS_KEY = "cmmauto.indicators.v1"; // 구버전(전역 지표) 마이그레이션용
@@ -384,6 +443,19 @@ class ChartPanel {
           b.classList.toggle("active", b.dataset.tool === tool);
         }
       },
+      onAlertToggle: (d) => {
+        ensureAudio();
+        if (d.alert && "Notification" in window && Notification.permission === "default") {
+          Notification.requestPermission();
+        }
+        const typeName = d.type === "hline" ? "수평선" : "추세선";
+        showToast(
+          d.alert ? "알림 설정됨" : "알림 해제됨",
+          d.alert
+            ? `${this.sel.symbol} ${typeName}에 가격이 닿으면 알려드립니다`
+            : `${this.sel.symbol} ${typeName} 알림을 껐습니다`,
+        );
+      },
     });
     this.els.drawGroup = this.root.querySelector(".draw-group");
     this.els.drawGroup.addEventListener("click", (e) => {
@@ -578,7 +650,13 @@ class ChartPanel {
         this.volumeSeries.update(volumePoint(b));
         changed = true;
       }
-      if (changed) this.recomputeIndicators();
+      if (changed) {
+        this.recomputeIndicators();
+        const last = this.bars[this.bars.length - 1];
+        for (const trig of this.drawingLayer.evaluateAlerts(last.close, last.time)) {
+          fireLineAlert(this, trig);
+        }
+      }
       this.els.emptyHint.hidden = true;
       this.updatePriceBox();
     } catch {

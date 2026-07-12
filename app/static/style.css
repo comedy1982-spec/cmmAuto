@@ -71,20 +71,22 @@ select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .dot-error { background: var(--down); }
 .dot-unknown { background: var(--text-muted); }
 
-/* ---------- 멀티 차트 그리드 ---------- */
+/* ---------- 멀티 차트 그리드 (JS가 grid-template과 배치를 직접 설정) ---------- */
 
 .grid {
   flex: 1;
   min-height: 0;
   display: grid;
-  gap: 4px;
-  background: var(--border);
 }
-.grid[data-layout="1"] { grid-template-columns: 1fr; grid-template-rows: 1fr; }
-.grid[data-layout="2"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
-.grid[data-layout="3"],
-.grid[data-layout="4"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
-.grid[data-layout="3"] .panel:first-child { grid-row: span 2; }
+
+.gutter {
+  background: var(--border);
+  z-index: 10;
+  touch-action: none;
+}
+.gutter-v { cursor: col-resize; }
+.gutter-h { cursor: row-resize; }
+.gutter:hover, .gutter.dragging { background: var(--accent); }
 
 /* ---------- 개별 차트 패널 ---------- */
 
@@ -179,7 +181,7 @@ select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   font-size: 13px;
 }
 
-/* ---------- 지표 설정 패널 ---------- */
+/* ---------- 지표 설정 패널 (프레임별) ---------- */
 
 .indicator-field { position: relative; }
 .indicator-btn {
@@ -187,8 +189,8 @@ select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 5px 10px;
-  font-size: 13px;
+  padding: 3px 8px;
+  font-size: 12px;
   cursor: pointer;
 }
 .indicator-btn:hover { border-color: var(--text-muted); }
@@ -199,14 +201,14 @@ select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
-  z-index: 20;
+  z-index: 30;
   width: 340px;
   background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
   padding: 10px 12px;
-  max-height: 70vh;
+  max-height: 60vh;
   overflow-y: auto;
 }
 .ind-section { padding: 8px 0; }

@@ -1,15 +1,17 @@
-/* cmmAuto 차트 뷰어 프론트엔드 — 멀티 차트 (최대 4분할)
+/* cmmAuto 차트 뷰어 프론트엔드 — 멀티 차트 (최대 4분할, 트레이딩뷰 스타일)
  *
- * - 툴바의 분할 버튼(1/2/3/4)으로 트레이딩뷰처럼 화면을 나눠 여러 차트를 동시에 본다
- * - 각 패널은 거래소/심볼/봉을 독립적으로 선택하고, 자체적으로 과거 로드·실시간 갱신
- * - 지표 설정(이동평균선·Envelope·볼린저·거래량·RSI·MACD)은 전 패널 공통 적용
- * - 분할 상태·패널별 선택·지표 설정은 localStorage에 저장되어 새로고침 후 유지
+ * - 툴바의 분할 버튼(1/2/3/4)으로 화면을 나누고, 경계선을 드래그해 프레임 크기 조절
+ * - 각 패널은 거래소/심볼/봉을 독립 선택하고, 자체적으로 과거 로드·실시간 갱신
+ * - 지표(이동평균선·Envelope·볼린저·거래량·RSI·MACD)는 패널마다 독립 설정
+ * - 분할 상태·크기·패널별 선택·패널별 지표 설정은 localStorage에 저장되어 유지
  */
 
 const LIVE_POLL_MS = 5000;
 const META_POLL_MS = 15000;
 const PAGE_SIZE = 600;
 const MAX_PANELS = 4;
+const GUTTER = 6;         // 프레임 경계선 두께(px)
+const SPLIT_MIN = 0.15;   // 드래그로 줄일 수 있는 최소 비율
 
 // 검증된 상승/하락 색 (다크 표면 #131722 기준 대비·CVD 분리 PASS)
 const UP = "#26a69a";
@@ -97,9 +99,9 @@ const lineDefaults = {
   crosshairMarkerVisible: false,
 };
 
-/* ---------- 지표 설정 (전 패널 공통, localStorage 저장) ---------- */
+/* ---------- 지표 설정 (패널별 독립) ---------- */
 
-const SETTINGS_KEY = "cmmauto.indicators.v1";
+const LEGACY_SETTINGS_KEY = "cmmauto.indicators.v1"; // 구버전(전역 지표) 마이그레이션용
 
 const DEFAULT_SETTINGS = {
   ma: [
@@ -115,11 +117,11 @@ const DEFAULT_SETTINGS = {
   macd: { on: false, fast: 12, slow: 26, signal: 9 },
 };
 
-function loadSettings() {
+/** 저장된 지표 설정을 기본값 위에 얹어 완전한 설정 객체를 만든다 */
+function mergeIndicatorSettings(saved) {
   const base = structuredClone(DEFAULT_SETTINGS);
+  if (!saved) return base;
   try {
-    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY));
-    if (!saved) return base;
     for (let i = 0; i < base.ma.length; i++) Object.assign(base.ma[i], saved.ma?.[i]);
     Object.assign(base.envelope, saved.envelope);
     Object.assign(base.bollinger, saved.bollinger);
@@ -130,18 +132,22 @@ function loadSettings() {
   return base;
 }
 
-let settings = loadSettings();
-
-function saveSettings() {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+function legacyGlobalSettings() {
+  try {
+    return JSON.parse(localStorage.getItem(LEGACY_SETTINGS_KEY));
+  } catch {
+    return null;
+  }
 }
 
 /* ---------- 개별 차트 패널 ---------- */
 
 class ChartPanel {
-  /** @param sel {exchange, symbol, timeframe} */
+  /** @param sel {exchange, symbol, timeframe, indicators?} */
   constructor(container, sel) {
-    this.sel = sel;
+    this.sel = { exchange: sel.exchange, symbol: sel.symbol, timeframe: sel.timeframe };
+    // 패널별 지표 설정: 저장값 → 구버전 전역 설정 → 기본값 순으로 복원
+    this.settings = mergeIndicatorSettings(sel.indicators ?? legacyGlobalSettings());
     this.bars = [];
     this.loadingOlder = false;
     this.hasMoreHistory = true;
@@ -155,6 +161,7 @@ class ChartPanel {
     container.appendChild(this.root);
     this.createCharts();
     this.renderToolbar();
+    this.buildIndicatorPopover();
     this.syncIndicatorSeries();
     this.loadInitial();
   }
@@ -165,6 +172,10 @@ class ChartPanel {
         <select class="sel-exchange" aria-label="거래소"></select>
         <select class="sel-symbol" aria-label="심볼"></select>
         <div class="segmented tf-group" role="group" aria-label="타임프레임"></div>
+        <div class="field indicator-field">
+          <button type="button" class="indicator-btn" aria-expanded="false">지표 ▾</button>
+          <div class="indicator-panel" hidden></div>
+        </div>
         <div class="panel-price" hidden>
           <span class="last">–</span>
           <span class="chg">–</span>
@@ -190,6 +201,8 @@ class ChartPanel {
       exchange: $("sel-exchange"),
       symbol: $("sel-symbol"),
       tfGroup: $("tf-group"),
+      indBtn: $("indicator-btn"),
+      indPanel: $("indicator-panel"),
       price: $("panel-price"),
       last: $("last"),
       chg: $("chg"),
@@ -218,6 +231,22 @@ class ChartPanel {
       saveLayout();
       this.loadInitial();
     });
+
+    this.els.indBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = this.els.indPanel.hidden;
+      closeAllIndicatorPopovers();
+      this.els.indPanel.hidden = !open;
+      this.els.indBtn.classList.toggle("open", open);
+      this.els.indBtn.setAttribute("aria-expanded", String(open));
+    });
+    this.els.indPanel.addEventListener("click", (e) => e.stopPropagation());
+  }
+
+  closeIndicatorPopover() {
+    this.els.indPanel.hidden = true;
+    this.els.indBtn.classList.remove("open");
+    this.els.indBtn.setAttribute("aria-expanded", "false");
   }
 
   createCharts() {
@@ -447,9 +476,10 @@ class ChartPanel {
     }
   }
 
-  /** 전역 지표 설정에 맞게 이 패널의 시리즈를 만들거나 제거한다 */
+  /** 이 패널의 지표 설정에 맞게 시리즈를 만들거나 제거한다 */
   syncIndicatorSeries() {
     const ind = this.ind;
+    const settings = this.settings;
 
     settings.ma.forEach((m, i) => {
       if (m.on && !ind.ma[i]) ind.ma[i] = this.addLine(this.chart, MA_COLORS[i], { lineWidth: 2 });
@@ -531,6 +561,7 @@ class ChartPanel {
   recomputeIndicatorsInner() {
     const bars = this.bars;
     const ind = this.ind;
+    const settings = this.settings;
     settings.ma.forEach((m, i) => {
       if (ind.ma[i]) ind.ma[i].setData(bars.length ? Indicators.ma(bars, m.period, m.type) : []);
     });
@@ -559,9 +590,119 @@ class ChartPanel {
   }
 
   applySettingsChange() {
+    saveLayout();
     this.syncIndicatorSeries();
     this.recomputeIndicators();
     this.renderLegend(null);
+  }
+
+  /* ----- 지표 설정 팝오버 (패널별) ----- */
+
+  buildIndicatorPopover() {
+    const panel = this.els.indPanel;
+    const settings = this.settings;
+    const apply = () => this.applySettingsChange();
+    panel.innerHTML = "";
+
+    const maSection = document.createElement("div");
+    maSection.className = "ind-section";
+    maSection.innerHTML = `<div class="ind-title">이동평균선</div>`;
+    settings.ma.forEach((m, i) => {
+      const row = document.createElement("div");
+      row.className = "ind-row";
+      const swatch = document.createElement("span");
+      swatch.className = "swatch";
+      swatch.style.background = MA_COLORS[i];
+      row.appendChild(swatch);
+      row.appendChild(checkboxLabel("", m.on, (v) => { m.on = v; apply(); }));
+      const typeSel = document.createElement("select");
+      for (const t of ["SMA", "EMA"]) {
+        const o = document.createElement("option");
+        o.value = t; o.textContent = t;
+        typeSel.appendChild(o);
+      }
+      typeSel.value = m.type;
+      typeSel.addEventListener("change", () => { m.type = typeSel.value; apply(); });
+      row.appendChild(typeSel);
+      row.appendChild(numberInput(m.period, 1, 400, 1, (v) => { m.period = v; apply(); }));
+      const sub = document.createElement("span");
+      sub.className = "sub";
+      sub.textContent = "기간";
+      row.appendChild(sub);
+      maSection.appendChild(row);
+    });
+    panel.appendChild(maSection);
+
+    const envSection = document.createElement("div");
+    envSection.className = "ind-section";
+    const envRow = document.createElement("div");
+    envRow.className = "ind-row";
+    envRow.appendChild(checkboxLabel("Envelope", settings.envelope.on, (v) => { settings.envelope.on = v; apply(); }));
+    envRow.appendChild(numberInput(settings.envelope.period, 1, 400, 1, (v) => { settings.envelope.period = v; apply(); }));
+    const envSub1 = document.createElement("span"); envSub1.className = "sub"; envSub1.textContent = "기간";
+    envRow.appendChild(envSub1);
+    envRow.appendChild(numberInput(settings.envelope.percent, 0.1, 50, 0.1, (v) => { settings.envelope.percent = v; apply(); }));
+    const envSub2 = document.createElement("span"); envSub2.className = "sub"; envSub2.textContent = "%";
+    envRow.appendChild(envSub2);
+    envSection.appendChild(envRow);
+    panel.appendChild(envSection);
+
+    const bbSection = document.createElement("div");
+    bbSection.className = "ind-section";
+    const bbRow = document.createElement("div");
+    bbRow.className = "ind-row";
+    bbRow.appendChild(checkboxLabel("볼린저밴드", settings.bollinger.on, (v) => { settings.bollinger.on = v; apply(); }));
+    bbRow.appendChild(numberInput(settings.bollinger.period, 1, 400, 1, (v) => { settings.bollinger.period = v; apply(); }));
+    const bbSub1 = document.createElement("span"); bbSub1.className = "sub"; bbSub1.textContent = "기간";
+    bbRow.appendChild(bbSub1);
+    bbRow.appendChild(numberInput(settings.bollinger.mult, 0.5, 10, 0.1, (v) => { settings.bollinger.mult = v; apply(); }));
+    const bbSub2 = document.createElement("span"); bbSub2.className = "sub"; bbSub2.textContent = "승수";
+    bbRow.appendChild(bbSub2);
+    bbSection.appendChild(bbRow);
+    panel.appendChild(bbSection);
+
+    const volSection = document.createElement("div");
+    volSection.className = "ind-section";
+    const volRow = document.createElement("div");
+    volRow.className = "ind-row";
+    volRow.appendChild(checkboxLabel("거래량", settings.volume.on, (v) => { settings.volume.on = v; apply(); }));
+    volSection.appendChild(volRow);
+    panel.appendChild(volSection);
+
+    const rsiSection = document.createElement("div");
+    rsiSection.className = "ind-section";
+    const rsiRow = document.createElement("div");
+    rsiRow.className = "ind-row";
+    rsiRow.appendChild(checkboxLabel("RSI", settings.rsi.on, (v) => { settings.rsi.on = v; apply(); }));
+    rsiRow.appendChild(numberInput(settings.rsi.period, 2, 100, 1, (v) => { settings.rsi.period = v; apply(); }));
+    const rsiSub = document.createElement("span"); rsiSub.className = "sub"; rsiSub.textContent = "기간";
+    rsiRow.appendChild(rsiSub);
+    rsiSection.appendChild(rsiRow);
+    panel.appendChild(rsiSection);
+
+    const macdSection = document.createElement("div");
+    macdSection.className = "ind-section";
+    const macdRow = document.createElement("div");
+    macdRow.className = "ind-row";
+    macdRow.appendChild(checkboxLabel("MACD", settings.macd.on, (v) => { settings.macd.on = v; apply(); }));
+    macdRow.appendChild(numberInput(settings.macd.fast, 2, 100, 1, (v) => { settings.macd.fast = v; apply(); }));
+    macdRow.appendChild(numberInput(settings.macd.slow, 2, 200, 1, (v) => { settings.macd.slow = v; apply(); }));
+    macdRow.appendChild(numberInput(settings.macd.signal, 2, 100, 1, (v) => { settings.macd.signal = v; apply(); }));
+    const macdSub = document.createElement("span"); macdSub.className = "sub"; macdSub.textContent = "단기·장기·시그널";
+    macdRow.appendChild(macdSub);
+    macdSection.appendChild(macdRow);
+    panel.appendChild(macdSection);
+
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.className = "ind-reset";
+    reset.textContent = "기본값으로 초기화";
+    reset.addEventListener("click", () => {
+      this.settings = structuredClone(DEFAULT_SETTINGS);
+      this.applySettingsChange();
+      this.buildIndicatorPopover();
+    });
+    panel.appendChild(reset);
   }
 
   /* ----- 표시 ----- */
@@ -580,7 +721,7 @@ class ChartPanel {
 
   maLegendHtml(param) {
     const parts = [];
-    settings.ma.forEach((m, i) => {
+    this.settings.ma.forEach((m, i) => {
       const series = this.ind.ma[i];
       if (!series) return;
       let value;
@@ -614,84 +755,7 @@ class ChartPanel {
   }
 }
 
-/* ---------- 레이아웃 관리 ---------- */
-
-const LAYOUT_KEY = "cmmauto.layout.v1";
-const gridEl = document.getElementById("grid");
-const panels = [];
-let layoutCount = 1;
-
-function defaultSelection(i) {
-  // 새 패널 기본값: 첫 거래소의 i번째 심볼 (없으면 첫 심볼)
-  const exId = Object.keys(meta.exchanges)[0];
-  const symbols = meta.exchanges[exId]?.symbols ?? [];
-  const sel = {
-    exchange: exId,
-    symbol: symbols[i % Math.max(1, symbols.length)] ?? symbols[0] ?? null,
-    timeframe: meta.timeframes.includes("1h") ? "1h" : meta.timeframes[0],
-  };
-  return sel;
-}
-
-function saveLayout() {
-  localStorage.setItem(LAYOUT_KEY, JSON.stringify({
-    layout: layoutCount,
-    panels: panels.map((p) => p.sel),
-  }));
-}
-
-function loadLayoutPref() {
-  try {
-    return JSON.parse(localStorage.getItem(LAYOUT_KEY)) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function validSelection(sel) {
-  if (!sel || !meta.exchanges[sel.exchange]) return null;
-  const exMeta = meta.exchanges[sel.exchange];
-  return {
-    exchange: sel.exchange,
-    symbol: exMeta.symbols.includes(sel.symbol) ? sel.symbol : exMeta.symbols[0],
-    timeframe: meta.timeframes.includes(sel.timeframe) ? sel.timeframe : meta.timeframes[0],
-  };
-}
-
-function setLayout(n, savedSelections = []) {
-  layoutCount = n;
-  gridEl.dataset.layout = String(n);
-  // 초과 패널 제거
-  while (panels.length > n) {
-    panels.pop().destroy();
-  }
-  // 부족 패널 추가
-  while (panels.length < n) {
-    const i = panels.length;
-    const sel = validSelection(savedSelections[i]) ?? defaultSelection(i);
-    panels.push(new ChartPanel(gridEl, sel));
-  }
-  for (const btn of document.querySelectorAll("#layout-group button")) {
-    btn.classList.toggle("active", Number(btn.dataset.layout) === n);
-  }
-  saveLayout();
-}
-
-document.getElementById("layout-group").addEventListener("click", (e) => {
-  const btn = e.target.closest("button[data-layout]");
-  if (!btn) return;
-  setLayout(Number(btn.dataset.layout));
-});
-
-/* ---------- 지표 설정 패널 (전 패널 공통) ---------- */
-
-const indicatorBtn = document.getElementById("indicator-btn");
-const indicatorPanel = document.getElementById("indicator-panel");
-
-function applyIndicatorSettings() {
-  saveSettings();
-  for (const p of panels) p.applySettingsChange();
-}
+/* ---------- 지표 팝오버 공용 위젯 ---------- */
 
 function numberInput(value, min, max, step, onChange) {
   const input = document.createElement("input");
@@ -717,124 +781,177 @@ function checkboxLabel(text, checked, onChange) {
   return label;
 }
 
-function buildIndicatorPanel() {
-  indicatorPanel.innerHTML = "";
-
-  const maSection = document.createElement("div");
-  maSection.className = "ind-section";
-  maSection.innerHTML = `<div class="ind-title">이동평균선</div>`;
-  settings.ma.forEach((m, i) => {
-    const row = document.createElement("div");
-    row.className = "ind-row";
-    const swatch = document.createElement("span");
-    swatch.className = "swatch";
-    swatch.style.background = MA_COLORS[i];
-    row.appendChild(swatch);
-    row.appendChild(checkboxLabel("", m.on, (v) => { m.on = v; applyIndicatorSettings(); }));
-    const typeSel = document.createElement("select");
-    for (const t of ["SMA", "EMA"]) {
-      const o = document.createElement("option");
-      o.value = t; o.textContent = t;
-      typeSel.appendChild(o);
-    }
-    typeSel.value = m.type;
-    typeSel.addEventListener("change", () => { m.type = typeSel.value; applyIndicatorSettings(); });
-    row.appendChild(typeSel);
-    row.appendChild(numberInput(m.period, 1, 400, 1, (v) => { m.period = v; applyIndicatorSettings(); }));
-    const sub = document.createElement("span");
-    sub.className = "sub";
-    sub.textContent = "기간";
-    row.appendChild(sub);
-    maSection.appendChild(row);
-  });
-  indicatorPanel.appendChild(maSection);
-
-  const envSection = document.createElement("div");
-  envSection.className = "ind-section";
-  const envRow = document.createElement("div");
-  envRow.className = "ind-row";
-  envRow.appendChild(checkboxLabel("Envelope", settings.envelope.on, (v) => { settings.envelope.on = v; applyIndicatorSettings(); }));
-  envRow.appendChild(numberInput(settings.envelope.period, 1, 400, 1, (v) => { settings.envelope.period = v; applyIndicatorSettings(); }));
-  const envSub1 = document.createElement("span"); envSub1.className = "sub"; envSub1.textContent = "기간";
-  envRow.appendChild(envSub1);
-  envRow.appendChild(numberInput(settings.envelope.percent, 0.1, 50, 0.1, (v) => { settings.envelope.percent = v; applyIndicatorSettings(); }));
-  const envSub2 = document.createElement("span"); envSub2.className = "sub"; envSub2.textContent = "%";
-  envRow.appendChild(envSub2);
-  envSection.appendChild(envRow);
-  indicatorPanel.appendChild(envSection);
-
-  const bbSection = document.createElement("div");
-  bbSection.className = "ind-section";
-  const bbRow = document.createElement("div");
-  bbRow.className = "ind-row";
-  bbRow.appendChild(checkboxLabel("볼린저밴드", settings.bollinger.on, (v) => { settings.bollinger.on = v; applyIndicatorSettings(); }));
-  bbRow.appendChild(numberInput(settings.bollinger.period, 1, 400, 1, (v) => { settings.bollinger.period = v; applyIndicatorSettings(); }));
-  const bbSub1 = document.createElement("span"); bbSub1.className = "sub"; bbSub1.textContent = "기간";
-  bbRow.appendChild(bbSub1);
-  bbRow.appendChild(numberInput(settings.bollinger.mult, 0.5, 10, 0.1, (v) => { settings.bollinger.mult = v; applyIndicatorSettings(); }));
-  const bbSub2 = document.createElement("span"); bbSub2.className = "sub"; bbSub2.textContent = "승수";
-  bbRow.appendChild(bbSub2);
-  bbSection.appendChild(bbRow);
-  indicatorPanel.appendChild(bbSection);
-
-  const volSection = document.createElement("div");
-  volSection.className = "ind-section";
-  const volRow = document.createElement("div");
-  volRow.className = "ind-row";
-  volRow.appendChild(checkboxLabel("거래량", settings.volume.on, (v) => { settings.volume.on = v; applyIndicatorSettings(); }));
-  volSection.appendChild(volRow);
-  indicatorPanel.appendChild(volSection);
-
-  const rsiSection = document.createElement("div");
-  rsiSection.className = "ind-section";
-  const rsiRow = document.createElement("div");
-  rsiRow.className = "ind-row";
-  rsiRow.appendChild(checkboxLabel("RSI", settings.rsi.on, (v) => { settings.rsi.on = v; applyIndicatorSettings(); }));
-  rsiRow.appendChild(numberInput(settings.rsi.period, 2, 100, 1, (v) => { settings.rsi.period = v; applyIndicatorSettings(); }));
-  const rsiSub = document.createElement("span"); rsiSub.className = "sub"; rsiSub.textContent = "기간";
-  rsiRow.appendChild(rsiSub);
-  rsiSection.appendChild(rsiRow);
-  indicatorPanel.appendChild(rsiSection);
-
-  const macdSection = document.createElement("div");
-  macdSection.className = "ind-section";
-  const macdRow = document.createElement("div");
-  macdRow.className = "ind-row";
-  macdRow.appendChild(checkboxLabel("MACD", settings.macd.on, (v) => { settings.macd.on = v; applyIndicatorSettings(); }));
-  macdRow.appendChild(numberInput(settings.macd.fast, 2, 100, 1, (v) => { settings.macd.fast = v; applyIndicatorSettings(); }));
-  macdRow.appendChild(numberInput(settings.macd.slow, 2, 200, 1, (v) => { settings.macd.slow = v; applyIndicatorSettings(); }));
-  macdRow.appendChild(numberInput(settings.macd.signal, 2, 100, 1, (v) => { settings.macd.signal = v; applyIndicatorSettings(); }));
-  const macdSub = document.createElement("span"); macdSub.className = "sub"; macdSub.textContent = "단기·장기·시그널";
-  macdRow.appendChild(macdSub);
-  macdSection.appendChild(macdRow);
-  indicatorPanel.appendChild(macdSection);
-
-  const reset = document.createElement("button");
-  reset.type = "button";
-  reset.className = "ind-reset";
-  reset.textContent = "기본값으로 초기화";
-  reset.addEventListener("click", () => {
-    settings = structuredClone(DEFAULT_SETTINGS);
-    applyIndicatorSettings();
-    buildIndicatorPanel();
-  });
-  indicatorPanel.appendChild(reset);
+function closeAllIndicatorPopovers() {
+  for (const p of panels) p.closeIndicatorPopover();
 }
 
-indicatorBtn.addEventListener("click", (e) => {
-  e.stopPropagation();
-  const open = indicatorPanel.hidden;
-  indicatorPanel.hidden = !open;
-  indicatorBtn.classList.toggle("open", open);
-  indicatorBtn.setAttribute("aria-expanded", String(open));
-});
-indicatorPanel.addEventListener("click", (e) => e.stopPropagation());
-document.addEventListener("click", () => {
-  if (!indicatorPanel.hidden) {
-    indicatorPanel.hidden = true;
-    indicatorBtn.classList.remove("open");
-    indicatorBtn.setAttribute("aria-expanded", "false");
+document.addEventListener("click", () => closeAllIndicatorPopovers());
+
+/* ---------- 레이아웃 관리 (분할 + 드래그 리사이즈) ---------- */
+
+const LAYOUT_KEY = "cmmauto.layout.v2";
+const LEGACY_LAYOUT_KEY = "cmmauto.layout.v1";
+const gridEl = document.getElementById("grid");
+const panels = [];
+let layoutCount = 1;
+// 경계선 위치 (0~1 비율). col: 좌/우 분할, row: 상/하 분할
+let splits = { col: 0.5, row: 0.5 };
+
+function defaultSelection(i) {
+  const exId = Object.keys(meta.exchanges)[0];
+  const symbols = meta.exchanges[exId]?.symbols ?? [];
+  return {
+    exchange: exId,
+    symbol: symbols[i % Math.max(1, symbols.length)] ?? symbols[0] ?? null,
+    timeframe: meta.timeframes.includes("1h") ? "1h" : meta.timeframes[0],
+  };
+}
+
+function saveLayout() {
+  localStorage.setItem(LAYOUT_KEY, JSON.stringify({
+    layout: layoutCount,
+    splits,
+    panels: panels.map((p) => ({ ...p.sel, indicators: p.settings })),
+  }));
+}
+
+function loadLayoutPref() {
+  try {
+    const v2 = JSON.parse(localStorage.getItem(LAYOUT_KEY));
+    if (v2) return v2;
+  } catch { /* fallthrough */ }
+  try {
+    // 구버전 마이그레이션: 패널 선택은 유지, 지표는 당시 전역 설정을 각 패널에 적용
+    const v1 = JSON.parse(localStorage.getItem(LEGACY_LAYOUT_KEY));
+    if (v1) return { layout: v1.layout, splits: null, panels: v1.panels ?? [] };
+  } catch { /* fallthrough */ }
+  return null;
+}
+
+function validSelection(sel) {
+  if (!sel || !meta.exchanges[sel.exchange]) return null;
+  const exMeta = meta.exchanges[sel.exchange];
+  return {
+    exchange: sel.exchange,
+    symbol: exMeta.symbols.includes(sel.symbol) ? sel.symbol : exMeta.symbols[0],
+    timeframe: meta.timeframes.includes(sel.timeframe) ? sel.timeframe : meta.timeframes[0],
+    indicators: sel.indicators ?? null,
+  };
+}
+
+/** 현재 splits 값으로 grid-template을 갱신한다 (드래그 중에도 호출됨) */
+function applyGridTemplate() {
+  const c = Math.min(1 - SPLIT_MIN, Math.max(SPLIT_MIN, splits.col));
+  const r = Math.min(1 - SPLIT_MIN, Math.max(SPLIT_MIN, splits.row));
+  if (layoutCount === 1) {
+    gridEl.style.gridTemplateColumns = "1fr";
+    gridEl.style.gridTemplateRows = "1fr";
+  } else if (layoutCount === 2) {
+    gridEl.style.gridTemplateColumns = `${c}fr ${GUTTER}px ${1 - c}fr`;
+    gridEl.style.gridTemplateRows = "1fr";
+  } else {
+    gridEl.style.gridTemplateColumns = `${c}fr ${GUTTER}px ${1 - c}fr`;
+    gridEl.style.gridTemplateRows = `${r}fr ${GUTTER}px ${1 - r}fr`;
   }
+}
+
+function makeGutter(direction) {
+  const g = document.createElement("div");
+  g.className = `gutter gutter-${direction}`;
+  g.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    g.setPointerCapture(e.pointerId);
+    g.classList.add("dragging");
+    const rect = gridEl.getBoundingClientRect();
+    const onMove = (ev) => {
+      if (direction === "v") {
+        splits.col = (ev.clientX - rect.left) / rect.width;
+      } else {
+        splits.row = (ev.clientY - rect.top) / rect.height;
+      }
+      splits.col = Math.min(1 - SPLIT_MIN, Math.max(SPLIT_MIN, splits.col));
+      splits.row = Math.min(1 - SPLIT_MIN, Math.max(SPLIT_MIN, splits.row));
+      applyGridTemplate();
+    };
+    const onUp = () => {
+      g.classList.remove("dragging");
+      g.removeEventListener("pointermove", onMove);
+      g.removeEventListener("pointerup", onUp);
+      saveLayout();
+    };
+    g.addEventListener("pointermove", onMove);
+    g.addEventListener("pointerup", onUp);
+  });
+  return g;
+}
+
+/** 패널·경계선을 grid 셀에 배치한다 */
+function placePanels() {
+  // 기존 경계선 제거
+  for (const g of gridEl.querySelectorAll(".gutter")) g.remove();
+
+  const place = (el, row, col) => {
+    el.style.gridRow = row;
+    el.style.gridColumn = col;
+  };
+
+  if (layoutCount === 1) {
+    place(panels[0].root, "1", "1");
+  } else if (layoutCount === 2) {
+    place(panels[0].root, "1", "1");
+    place(panels[1].root, "1", "3");
+    const gv = makeGutter("v");
+    place(gv, "1", "2");
+    gridEl.appendChild(gv);
+  } else if (layoutCount === 3) {
+    // 좌 1개(세로 전체) + 우 2개(상하)
+    place(panels[0].root, "1 / -1", "1");
+    place(panels[1].root, "1", "3");
+    place(panels[2].root, "3", "3");
+    const gv = makeGutter("v");
+    place(gv, "1 / -1", "2");
+    gridEl.appendChild(gv);
+    const gh = makeGutter("h");
+    place(gh, "2", "3");
+    gridEl.appendChild(gh);
+  } else {
+    // 2×2
+    place(panels[0].root, "1", "1");
+    place(panels[1].root, "1", "3");
+    place(panels[2].root, "3", "1");
+    place(panels[3].root, "3", "3");
+    const gv = makeGutter("v");
+    place(gv, "1 / -1", "2");
+    gridEl.appendChild(gv);
+    const gh = makeGutter("h");
+    place(gh, "2", "1 / -1");
+    gridEl.appendChild(gh);
+  }
+  applyGridTemplate();
+}
+
+function setLayout(n, savedSelections = []) {
+  layoutCount = n;
+  gridEl.dataset.layout = String(n);
+  while (panels.length > n) {
+    panels.pop().destroy();
+  }
+  while (panels.length < n) {
+    const i = panels.length;
+    const sel = validSelection(savedSelections[i]) ?? defaultSelection(i);
+    panels.push(new ChartPanel(gridEl, sel));
+  }
+  placePanels();
+  for (const btn of document.querySelectorAll("#layout-group button")) {
+    btn.classList.toggle("active", Number(btn.dataset.layout) === n);
+  }
+  saveLayout();
+}
+
+document.getElementById("layout-group").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-layout]");
+  if (!btn) return;
+  setLayout(Number(btn.dataset.layout));
 });
 
 /* ---------- 수집기 상태 표시 ---------- */
@@ -850,7 +967,6 @@ async function refreshMeta() {
     statusText.textContent = "서버 연결 끊김";
     return;
   }
-  // 전체 거래소를 요약: 오류가 하나라도 있으면 표시, 아니면 최근 동기화 시각
   let error = null;
   let lastSync = null;
   for (const [exId, ex] of Object.entries(meta.exchanges)) {
@@ -875,9 +991,9 @@ async function refreshMeta() {
 
 async function init() {
   meta = await api("/api/meta");
-  buildIndicatorPanel();
 
   const saved = loadLayoutPref();
+  if (saved?.splits) splits = { col: saved.splits.col ?? 0.5, row: saved.splits.row ?? 0.5 };
   const n = Math.min(MAX_PANELS, Math.max(1, saved?.layout ?? 1));
   setLayout(n, saved?.panels ?? []);
 

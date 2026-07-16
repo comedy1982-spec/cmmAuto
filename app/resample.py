@@ -53,33 +53,38 @@ def pick_source(available: list[str], tf: str) -> str | None:
     return best
 
 
-def _bucket_key(t: int, n: int, u: str) -> int:
+def _bucket_key(t: int, n: int, u: str, tz_off: int) -> int:
+    """tz_off(초)만큼 이동한 현지 시간 기준으로 버킷 인덱스를 계산한다."""
+    lt = t + tz_off
     if u in ("m", "h"):
-        return t // (n * SEC[u])
-    d = t // 86400
+        return lt // (n * SEC[u])
+    d = lt // 86400
     if u == "d":
         return d // n
     if u == "w":
         # 1970-01-01은 목요일: +3일 보정으로 월요일 시작 주 인덱스를 만든다
         return ((d + 3) // 7) // n
-    dt = datetime.fromtimestamp(t, tz=timezone.utc)
+    dt = datetime.fromtimestamp(lt, tz=timezone.utc)
     # _bucket_start와 짝을 맞추기 위해 1970년 기준 월 인덱스를 쓴다
     return ((dt.year - 1970) * 12 + dt.month - 1) // n
 
 
-def _bucket_start(key: int, n: int, u: str) -> int:
+def _bucket_start(key: int, n: int, u: str, tz_off: int) -> int:
+    """버킷 시작 시각(UTC 초). 현지 기준 경계를 UTC로 되돌린다."""
     if u in ("m", "h"):
-        return key * n * SEC[u]
+        return key * n * SEC[u] - tz_off
     if u == "d":
-        return key * n * 86400
+        return key * n * 86400 - tz_off
     if u == "w":
-        return (key * n * 7 - 3) * 86400
+        return (key * n * 7 - 3) * 86400 - tz_off
     months = key * n
-    return int(datetime(1970 + months // 12, months % 12 + 1, 1, tzinfo=timezone.utc).timestamp())
+    local = int(datetime(1970 + months // 12, months % 12 + 1, 1, tzinfo=timezone.utc).timestamp())
+    return local - tz_off
 
 
-def resample(rows: list[dict], tf: str) -> list[dict]:
-    """오름차순 캔들(dict, time은 초)을 tf 버킷으로 집계한다."""
+def resample(rows: list[dict], tf: str, tz_off: int = 0) -> list[dict]:
+    """오름차순 캔들(dict, time은 초)을 tf 버킷으로 집계한다.
+    tz_off(초)를 주면 일/주/월 등 버킷 경계가 그 시간대 기준으로 정렬된다."""
     p = parse_tf(tf)
     if not p:
         return []
@@ -88,13 +93,13 @@ def resample(rows: list[dict], tf: str) -> list[dict]:
     cur_key = None
     cur: dict | None = None
     for r in rows:
-        k = _bucket_key(r["time"], n, u)
+        k = _bucket_key(r["time"], n, u, tz_off)
         if k != cur_key:
             if cur:
                 out.append(cur)
             cur_key = k
             cur = {
-                "time": _bucket_start(k, n, u),
+                "time": _bucket_start(k, n, u, tz_off),
                 "open": r["open"], "high": r["high"],
                 "low": r["low"], "close": r["close"],
                 "volume": r["volume"],

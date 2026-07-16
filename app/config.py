@@ -11,9 +11,11 @@ ROOT = BASE_DIR
 
 DEFAULT_CONFIG = {
     "database": "data/candles.db",
-    "poll_interval_seconds": 20,
+    "poll_interval_seconds": 5,
+    "live_refresh_seconds": 10,
     "backfill_candles": 1500,
     "dynamic_ttl_seconds": 900,
+    "timezone_offset_hours": 9,
     "timeframes": ["1m", "5m", "15m", "1h", "4h", "1d"],
     "exchanges": {
         "upbit": {
@@ -49,8 +51,10 @@ class ExchangeConfig:
 class Config:
     database: Path
     poll_interval_seconds: int
+    live_refresh_seconds: int
     backfill_candles: int
     dynamic_ttl_seconds: int
+    timezone_offset_hours: int
     timeframes: list[str]
     exchanges: dict[str, ExchangeConfig]
 
@@ -78,9 +82,11 @@ def load_config(path: Path | None = None) -> Config:
 
     return Config(
         database=db_path,
-        poll_interval_seconds=int(raw.get("poll_interval_seconds", 20)),
+        poll_interval_seconds=int(raw.get("poll_interval_seconds", 5)),
+        live_refresh_seconds=int(raw.get("live_refresh_seconds", 10)),
         backfill_candles=int(raw.get("backfill_candles", 1500)),
         dynamic_ttl_seconds=int(raw.get("dynamic_ttl_seconds", 900)),
+        timezone_offset_hours=int(raw.get("timezone_offset_hours", 9)),
         timeframes=list(raw.get("timeframes", ["1m", "1h", "1d"])),
         exchanges=exchanges,
     )

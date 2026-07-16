@@ -32,6 +32,8 @@ class Collector:
         self.tasks: list[asyncio.Task] = []
         # 동적 수집 대상: (ex_id, symbol, tf) → 마지막 조회 시각
         self.dynamic: dict[tuple[str, str, str], float] = {}
+        # 온디맨드 동기화 스로틀: (ex_id, symbol, tf) → 마지막 즉시 동기화 시각(monotonic)
+        self._last_ensure: dict[tuple[str, str, str], float] = {}
         # 프론트엔드 상태 표시용: {exchange: {ok, last_sync, last_error, timeframes}}
         self.status: dict[str, dict] = {}
 
@@ -67,14 +69,11 @@ class Collector:
         return not exchange.timeframes or tf in exchange.timeframes
 
     def _jobs(self, ex_id: str) -> list[tuple[str, str]]:
-        """이번 사이클에 수집할 (symbol, tf) 목록: 기본 + 살아있는 동적 대상."""
+        """이번 사이클에 수집할 (symbol, tf) 목록.
+        지금 화면에서 보고 있는 동적 대상을 앞에 둬서 먼저 갱신한다."""
         exchange = self.exchanges[ex_id]
         jobs: list[tuple[str, str]] = []
         seen: set[tuple[str, str]] = set()
-        for symbol in self.cfg.exchanges[ex_id].symbols:
-            for tf in self.status[ex_id]["timeframes"]:
-                jobs.append((symbol, tf))
-                seen.add((symbol, tf))
         cutoff = time.time() - self.cfg.dynamic_ttl_seconds
         for (dex, symbol, tf), last in list(self.dynamic.items()):
             if dex != ex_id:
@@ -85,6 +84,11 @@ class Collector:
             if (symbol, tf) not in seen and self._tf_supported(exchange, tf):
                 jobs.append((symbol, tf))
                 seen.add((symbol, tf))
+        for symbol in self.cfg.exchanges[ex_id].symbols:
+            for tf in self.status[ex_id]["timeframes"]:
+                if (symbol, tf) not in seen:
+                    jobs.append((symbol, tf))
+                    seen.add((symbol, tf))
         return jobs
 
     async def _run_exchange(self, ex_id: str) -> None:
@@ -105,16 +109,22 @@ class Collector:
             await asyncio.sleep(self.cfg.poll_interval_seconds)
 
     async def ensure_fresh(self, ex_id: str, symbol: str, tf: str) -> None:
-        """차트가 열어본 (심볼, 봉)을 동적 수집 대상으로 등록하고,
-        데이터가 없거나 오래됐으면 즉시 한 번 동기화한다 (API 경로에서 호출)."""
+        """차트가 열어본 (심볼, 봉)을 동적 수집 대상으로 등록하고, 저장분이
+        live_refresh_seconds보다 오래됐으면 즉시 동기화한다 (API 경로에서 호출).
+        같은 대상의 즉시 동기화는 live_refresh_seconds에 한 번으로 제한."""
         exchange = self.exchanges.get(ex_id)
         if exchange is None or not self._tf_supported(exchange, tf):
             return
-        self.dynamic[(ex_id, symbol, tf)] = time.time()
+        key = (ex_id, symbol, tf)
+        self.dynamic[key] = time.time()
+        mono = time.monotonic()
+        if mono - self._last_ensure.get(key, -1e9) < self.cfg.live_refresh_seconds:
+            return
+        self._last_ensure[key] = mono
         try:
-            tf_ms = exchange.parse_timeframe(tf) * 1000
+            live_ms = self.cfg.live_refresh_seconds * 1000
             last = await self.db.last_timestamp(ex_id, symbol, tf)
-            if last is None or last < exchange.milliseconds() - 2 * tf_ms:
+            if last is None or last < exchange.milliseconds() - live_ms:
                 await self._sync_one(exchange, ex_id, symbol, tf)
         except Exception as e:  # noqa: BLE001 - 조회 실패 시 저장분만 반환
             log.warning("[%s] %s %s 온디맨드 수집 실패: %s", ex_id, symbol, tf, e)

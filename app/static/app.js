@@ -6,8 +6,8 @@
  * - 분할 상태·크기·패널별 선택·패널별 지표 설정은 localStorage에 저장되어 유지
  */
 
-const LIVE_POLL_MS = 5000;
-const META_POLL_MS = 15000;
+const LIVE_POLL_MS = 2000;
+const META_POLL_MS = 10000;
 const PAGE_SIZE = 600;
 const MAX_PANELS = 4;
 const GUTTER = 6;         // 프레임 경계선 두께(px)
@@ -122,6 +122,32 @@ function withWarmupWhitespace(bars, points) {
   return pad.concat(points);
 }
 
+/* ---------- 한국시간(KST) 표시 ---------- */
+
+const KST = "Asia/Seoul";
+const kstFmt = {
+  year: new Intl.DateTimeFormat("ko-KR", { timeZone: KST, year: "numeric" }),
+  month: new Intl.DateTimeFormat("ko-KR", { timeZone: KST, month: "short" }),
+  day: new Intl.DateTimeFormat("ko-KR", { timeZone: KST, day: "numeric" }),
+  time: new Intl.DateTimeFormat("ko-KR", { timeZone: KST, hour: "2-digit", minute: "2-digit", hour12: false }),
+  full: new Intl.DateTimeFormat("ko-KR", {
+    timeZone: KST,
+    year: "2-digit", month: "numeric", day: "numeric", weekday: "short",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }),
+};
+
+function kstTickMark(time, tickMarkType) {
+  const d = new Date(time * 1000);
+  const T = LightweightCharts.TickMarkType;
+  switch (tickMarkType) {
+    case T.Year: return kstFmt.year.format(d);
+    case T.Month: return kstFmt.month.format(d);
+    case T.DayOfMonth: return kstFmt.day.format(d);
+    default: return kstFmt.time.format(d);
+  }
+}
+
 function baseChartOptions() {
   return {
     layout: {
@@ -139,8 +165,16 @@ function baseChartOptions() {
       horzLine: { color: "#4c525e", labelBackgroundColor: "#2a2e39" },
     },
     rightPriceScale: { borderColor: "#2a2e39", minimumWidth: PRICE_SCALE_WIDTH },
-    timeScale: { borderColor: "#2a2e39", timeVisible: true, secondsVisible: false },
-    localization: { locale: "ko-KR" },
+    timeScale: {
+      borderColor: "#2a2e39",
+      timeVisible: true,
+      secondsVisible: false,
+      tickMarkFormatter: kstTickMark, // 시간축을 한국시간으로 표시
+    },
+    localization: {
+      locale: "ko-KR",
+      timeFormatter: (t) => kstFmt.full.format(new Date(t * 1000)), // 십자선 시간 라벨 (KST)
+    },
   };
 }
 
@@ -1336,7 +1370,7 @@ async function buildLayoutPopover() {
     listSection.innerHTML += `<div class="lay-empty">저장된 레이아웃이 없습니다</div>`;
   }
 
-  const dateFmt = new Intl.DateTimeFormat("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const dateFmt = new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
   for (const item of layouts) {
     const row = document.createElement("div");
     row.className = "lay-row";

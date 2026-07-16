@@ -100,7 +100,7 @@ async def candles(
         if src is not None:
             fetch = source_fetch_limit(src, timeframe, limit)
             src_rows = await app.state.db.get_candles(exchange, symbol, src, limit=fetch, before_ms=before_ms)
-            res = resample(src_rows, timeframe)
+            res = resample(src_rows, timeframe, tz_off=cfg.timezone_offset_hours * 3600)
             # 소스를 상한까지 읽었다면 가장 오래된 버킷은 앞부분이 잘렸을 수 있어 제외
             if len(src_rows) >= fetch and len(res) > 1:
                 res = res[1:]

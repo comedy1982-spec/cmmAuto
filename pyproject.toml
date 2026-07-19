@@ -1,0 +1,29 @@
+[project]
+name = "cmm-auto"
+version = "0.1.0"
+description = "쿠팡 상품 자동 쇼츠 영상 생성 파이프라인"
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.12",
+    "requests>=2.31",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "responses>=0.25",
+]
+
+[project.scripts]
+cmm-auto = "cmm_auto.cli:app"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

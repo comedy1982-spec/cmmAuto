@@ -89,6 +89,43 @@ def generate(
             typer.echo(f"  음성 {len(segments)}개 세그먼트, 총 {total:.1f}초 → {product_dir(settings, p.product_id)}")
 
 
+@app.command()
+def render(
+    product_id: int = typer.Option(None, "--id", help="특정 상품 ID만 렌더링"),
+    all_ready: bool = typer.Option(False, "--all", "-a", help="assets_ready 상태 상품 전부"),
+    bgm_dir: str = typer.Option("assets/bgm", "--bgm-dir", help="BGM 디렉터리 (없으면 BGM 생략)"),
+):
+    """음성+이미지+자막 → 쇼츠 mp4 렌더링 (assets_ready → rendered)."""
+    from pathlib import Path
+    from .pipeline import product_dir
+    from .renderer.ffmpeg_renderer import RenderError, ensure_ffmpeg, render_product
+
+    ensure_ffmpeg()
+    settings = load_settings()
+    with Database(settings.db_path) as db:
+        if product_id is not None:
+            targets = [db.get(product_id)] if db.get(product_id) else []
+        elif all_ready:
+            targets = db.list_products(status="assets_ready", limit=1000)
+        else:
+            typer.echo("--id 또는 --all 을 지정하세요.", err=True)
+            raise typer.Exit(1)
+
+        if not targets:
+            typer.echo("렌더링할 상품이 없습니다. (assets_ready 상태 상품 필요)")
+            return
+
+        for p in targets:
+            typer.echo(f"▶ {p.product_id} {p.name[:36]}")
+            try:
+                out = render_product(product_dir(settings, p.product_id), bgm_dir=Path(bgm_dir))
+            except RenderError as e:
+                typer.echo(f"  ✗ 렌더링 실패: {e}", err=True)
+                continue
+            db.set_status(p.product_id, "rendered")
+            typer.echo(f"  ✓ {out}")
+
+
 @app.command("list")
 def list_cmd(
     status: str = typer.Option(None, "--status", "-s", help=f"상태 필터 {STATUSES}"),

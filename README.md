@@ -8,7 +8,7 @@ YouTube Shorts / Instagram Reels / TikTok에 업로드하는 파이프라인입�
 
 - [x] **M1** 상품 수집: 파트너스 API 클라이언트(검색/베스트/골드박스/딥링크) + SQLite 저장 + CLI
 - [x] **M2** 대본 생성(Claude API + 템플릿 폴백) + Edge TTS 음성 + SRT 자막 타이밍
-- [ ] M3 영상 렌더링
+- [x] **M3** FFmpeg 쇼츠 렌더링 (1080x1920, 블러 배경 + 줌인 + 제목/자막 번인 + BGM 믹싱)
 - [ ] M4 파이프라인 통합
 - [ ] M5 YouTube 업로드
 - [ ] M6 Instagram / TikTok 업로드 + 스케줄러
@@ -50,6 +50,17 @@ cmm-auto generate --all --voice ko-KR-InJoonNeural   # 남성 보이스
 템플릿으로 대본을 생성합니다. 결과물은 `output/{상품ID}/`에 저장됩니다:
 `script.json`(대본/제목/설명), `audio/seg_*.mp3`(문장별 음성),
 `subtitle.srt`(자막), `timing.json`(타이밍), `product.jpg`(상품 이미지).
+
+```bash
+# 쇼츠 영상 렌더링 (assets_ready → rendered) — ffmpeg 필요
+cmm-auto render --id 7654321002
+cmm-auto render --all
+```
+
+렌더링 결과는 `output/{상품ID}/final.mp4`(1080x1920)와 업로드용 메타데이터
+`meta.json`(제목/설명/해시태그)입니다. `assets/bgm/`에 mp3를 넣어두면
+랜덤으로 골라 배경음악으로 깔아줍니다(음량 자동 감쇠). 한글 자막/제목
+렌더링에는 나눔고딕 등 한글 폰트가 설치되어 있어야 합니다.
 
 수집된 상품은 `data/cmm_auto.db`(SQLite)에 저장되며, 파이프라인 상태는
 `collected → scripted → assets_ready → rendered → uploaded` 순으로 진행됩니다.

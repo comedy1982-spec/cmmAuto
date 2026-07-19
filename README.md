@@ -7,7 +7,7 @@ YouTube Shorts / Instagram Reels / TikTok에 업로드하는 파이프라인입�
 ## 현재 구현 상태
 
 - [x] **M1** 상품 수집: 파트너스 API 클라이언트(검색/베스트/골드박스/딥링크) + SQLite 저장 + CLI
-- [ ] M2 대본 생성 + Edge TTS
+- [x] **M2** 대본 생성(Claude API + 템플릿 폴백) + Edge TTS 음성 + SRT 자막 타이밍
 - [ ] M3 영상 렌더링
 - [ ] M4 파이프라인 통합
 - [ ] M5 YouTube 업로드
@@ -39,7 +39,17 @@ cmm-auto collect --goldbox --min-price 10000 --max-price 100000
 # 저장된 상품 확인
 cmm-auto list
 cmm-auto list --status collected
+
+# 대본 + 음성 + 자막 생성 (collected → assets_ready)
+cmm-auto generate --id 7654321002        # 특정 상품
+cmm-auto generate --all                  # collected 상태 전부
+cmm-auto generate --all --voice ko-KR-InJoonNeural   # 남성 보이스
 ```
+
+`ANTHROPIC_API_KEY`가 `.env`에 있으면 Claude가 대본을 쓰고, 없으면 내장
+템플릿으로 대본을 생성합니다. 결과물은 `output/{상품ID}/`에 저장됩니다:
+`script.json`(대본/제목/설명), `audio/seg_*.mp3`(문장별 음성),
+`subtitle.srt`(자막), `timing.json`(타이밍), `product.jpg`(상품 이미지).
 
 수집된 상품은 `data/cmm_auto.db`(SQLite)에 저장되며, 파이프라인 상태는
 `collected → scripted → assets_ready → rendered → uploaded` 순으로 진행됩니다.

@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cmmAuto — 쿠팡 쇼츠 자동 생성</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --text: #16181d; --muted: #6b7280;
+    --line: #e3e6ea; --accent: #2563eb; --accent-fg: #fff;
+    --ok: #16a34a; --warn: #d97706; --err: #dc2626; --chip: #eef2f7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a; --card: #1c1f25; --text: #e8eaed; --muted: #9aa1ab;
+      --line: #2b2f36; --accent: #3b82f6; --chip: #262a31;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+    line-height: 1.55;
+  }
+  header {
+    background: var(--card); border-bottom: 1px solid var(--line);
+    padding: 14px 20px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 1.15rem; margin: 0; letter-spacing: -0.02em; }
+  header .sub { color: var(--muted); font-size: .85rem; }
+  .env { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip {
+    font-size: .78rem; padding: 3px 10px; border-radius: 999px;
+    background: var(--chip); color: var(--muted); white-space: nowrap;
+  }
+  .chip.ok { color: var(--ok); } .chip.no { color: var(--err); }
+  main { max-width: 1120px; margin: 0 auto; padding: 22px 20px 60px; }
+  .layout { display: grid; grid-template-columns: 340px 1fr; gap: 22px; align-items: start; }
+  @media (max-width: 880px) { .layout { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 18px;
+  }
+  .panel h2 { margin: 0 0 14px; font-size: .95rem; letter-spacing: -0.01em; }
+  label { display: block; font-size: .82rem; color: var(--muted); margin: 12px 0 5px; }
+  input[type=text], input[type=number], select {
+    width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--bg); color: var(--text); font-size: .9rem; font-family: inherit;
+  }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .row { display: flex; gap: 10px; }
+  .row > * { flex: 1; }
+  .check { display: flex; align-items: center; gap: 7px; margin-top: 14px; font-size: .88rem; }
+  .check input { width: auto; }
+  button {
+    font-family: inherit; font-size: .88rem; padding: 9px 15px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); width: 100%; margin-top: 18px; padding: 11px; font-weight: 600; }
+  button.sm { padding: 6px 11px; font-size: .82rem; }
+  button.danger:hover:not(:disabled) { border-color: var(--err); color: var(--err); }
+  .hint { font-size: .78rem; color: var(--muted); margin-top: 5px; }
+  .toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+  .toolbar h2 { margin: 0; font-size: .95rem; }
+  .toolbar .spacer { flex: 1; }
+  .cards { display: grid; gap: 12px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px; display: grid; grid-template-columns: 74px 1fr auto; gap: 14px; align-items: center;
+  }
+  @media (max-width: 620px) { .card { grid-template-columns: 60px 1fr; } .card .actions { grid-column: 1 / -1; } }
+  .thumb {
+    width: 74px; height: 74px; border-radius: 9px; object-fit: cover;
+    background: var(--chip); border: 1px solid var(--line);
+  }
+  .thumb.noimg {
+    display: flex; align-items: center; justify-content: center; text-align: center;
+    font-size: .7rem; color: var(--muted); white-space: pre-line;
+  }
+  .card .name { font-weight: 600; font-size: .92rem; margin-bottom: 3px; word-break: break-all; }
+  .card .meta { font-size: .82rem; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .badge { font-size: .74rem; padding: 2px 8px; border-radius: 999px; background: var(--chip); }
+  .badge.rendered { color: var(--ok); }
+  .badge.running { color: var(--accent); }
+  .actions { display: flex; gap: 7px; flex-wrap: wrap; }
+  .steps { display: flex; gap: 6px; margin-top: 9px; }
+  .step {
+    flex: 1; height: 5px; border-radius: 3px; background: var(--line); transition: background .3s;
+  }
+  .step.done { background: var(--ok); }
+  .step.active { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .4; } }
+  .joblog { font-size: .8rem; color: var(--muted); margin-top: 7px; white-space: pre-wrap; }
+  .joblog.err { color: var(--err); }
+  .empty { text-align: center; color: var(--muted); padding: 46px 20px; font-size: .9rem; }
+  dialog {
+    border: 1px solid var(--line); border-radius: 14px; background: var(--card); color: var(--text);
+    padding: 0; max-width: 760px; width: 92vw;
+  }
+  dialog::backdrop { background: rgba(0,0,0,.55); }
+  .modal-head { padding: 15px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; }
+  .modal-head h3 { margin: 0; font-size: .98rem; flex: 1; }
+  .modal-body { padding: 20px; display: grid; grid-template-columns: 260px 1fr; gap: 20px; }
+  @media (max-width: 700px) { .modal-body { grid-template-columns: 1fr; } }
+  video { width: 100%; border-radius: 10px; background: #000; }
+  .field { margin-bottom: 14px; }
+  .field-head { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+  .field-head span { font-size: .8rem; color: var(--muted); }
+  .field pre {
+    margin: 0; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line);
+    border-radius: 8px; font-size: .82rem; white-space: pre-wrap; word-break: break-word;
+    font-family: inherit; max-height: 190px; overflow: auto;
+  }
+  .toast {
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
+    background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 999px;
+    font-size: .86rem; opacity: 0; pointer-events: none; transition: opacity .25s; z-index: 100;
+    max-width: 90vw; text-align: center;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>cmmAuto</h1>
+    <div class="sub">쿠팡 상품 쇼츠 영상 자동 생성</div>
+  </div>
+  <div class="env" id="env"></div>
+</header>
+
+<main>
+<div class="layout">
+  <section class="panel">
+    <h2>상품 등록</h2>
+    <form id="addForm">
+      <label for="f-url">쿠팡 상품 주소</label>
+      <input type="text" id="f-url" required placeholder="https://www.coupang.com/vp/products/...">
+
+      <label for="f-name">상품명</label>
+      <input type="text" id="f-name" required placeholder="테팔 에어프라이어 4.2L">
+
+      <div class="row">
+        <div>
+          <label for="f-price">가격(원)</label>
+          <input type="number" id="f-price" required min="0" placeholder="29900">
+        </div>
+        <div>
+          <label for="f-category">카테고리</label>
+          <input type="text" id="f-category" placeholder="주방가전">
+        </div>
+      </div>
+
+      <label for="f-image">상품 이미지 주소</label>
+      <input type="text" id="f-image" required placeholder="https://...jpg">
+      <div class="hint">상품 사진 우클릭 → “이미지 주소 복사”</div>
+
+      <label for="f-deeplink">파트너스 링크 (선택)</label>
+      <input type="text" id="f-deeplink" placeholder="https://link.coupang.com/a/...">
+
+      <label class="check"><input type="checkbox" id="f-rocket"> 로켓배송 상품</label>
+
+      <button type="submit" class="primary">상품 등록</button>
+    </form>
+  </section>
+
+  <section>
+    <div class="toolbar">
+      <h2>등록된 상품</h2>
+      <span class="chip" id="count">0개</span>
+      <div class="spacer"></div>
+      <label for="f-voice" style="margin:0">목소리</label>
+      <select id="f-voice" style="width:auto">
+        <option value="ko-KR-SunHiNeural">여성 (SunHi)</option>
+        <option value="ko-KR-InJoonNeural">남성 (InJoon)</option>
+        <option value="ko-KR-HyunsuMultilingualNeural">남성 (Hyunsu)</option>
+      </select>
+      <button class="sm" id="runAll">전체 생성</button>
+    </div>
+    <div class="cards" id="cards"></div>
+  </section>
+</div>
+</main>
+
+<dialog id="preview">
+  <div class="modal-head">
+    <h3 id="pv-title">영상 미리보기</h3>
+    <button class="sm" onclick="document.getElementById('preview').close()">닫기</button>
+  </div>
+  <div class="modal-body">
+    <video id="pv-video" controls playsinline></video>
+    <div>
+      <div class="field">
+        <div class="field-head"><span>제목</span><button class="sm" data-copy="pv-t">복사</button></div>
+        <pre id="pv-t"></pre>
+      </div>
+      <div class="field">
+        <div class="field-head"><span>설명문</span><button class="sm" data-copy="pv-d">복사</button></div>
+        <pre id="pv-d"></pre>
+      </div>
+      <div class="field">
+        <div class="field-head"><span>해시태그</span><button class="sm" data-copy="pv-h">복사</button></div>
+        <pre id="pv-h"></pre>
+      </div>
+    </div>
+  </div>
+</dialog>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const jobs = {};       // product_id -> job state
+let products = [];
+
+function toast(msg) {
+  const t = $('toast');
+  // 여러 줄 오류는 첫 줄만 (자세한 내용은 카드에 그대로 남는다)
+  const first = String(msg).split('\n')[0];
+  t.textContent = first.length > 70 ? first.slice(0, 69) + '…' : first;
+  t.classList.add('show');
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.classList.remove('show'), 2600);
+}
+
+async function api(path, opts) {
+  const res = await fetch(path, {
+    headers: { 'Content-Type': 'application/json' }, ...opts
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.json()).detail || detail; } catch {}
+    throw new Error(detail);
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+async function loadEnv() {
+  const s = await api('/api/status');
+  $('env').innerHTML = [
+    `<span class="chip ${s.ffmpeg ? 'ok' : 'no'}">FFmpeg ${s.ffmpeg ? '준비됨' : '없음'}</span>`,
+    `<span class="chip ${s.anthropic_api ? 'ok' : ''}">${s.anthropic_api ? 'AI 대본' : '기본 대본'}</span>`,
+    `<span class="chip ${s.coupang_api ? 'ok' : ''}">${s.coupang_api ? '파트너스 연결됨' : '수동 등록'}</span>`,
+  ].join('');
+}
+
+function cardHTML(p) {
+  const job = jobs[p.product_id];
+  const busy = job && job.status === 'running';
+  const badge = busy
+    ? '<span class="badge running">생성 중…</span>'
+    : `<span class="badge ${p.status}">${p.status_label}</span>`;
+
+  let progress = '';
+  if (job) {
+    const steps = job.step_labels.map((_, i) => {
+      const cls = job.step > i ? 'done' : (busy && job.step === i ? 'active' : '');
+      return `<div class="step ${cls}"></div>`;
+    }).join('');
+    const last = job.logs[job.logs.length - 1] || job.step_labels[job.step] + ' 진행 중…';
+    progress = `<div class="steps">${steps}</div>
+      <div class="joblog ${job.status === 'error' ? 'err' : ''}">${esc(last)}</div>`;
+  }
+
+  return `<div class="card">
+    <img class="thumb" src="${esc(p.image_url)}" alt="" loading="lazy"
+         onerror="this.replaceWith(Object.assign(document.createElement('div'),
+                  {className:'thumb noimg', textContent:'이미지\\n없음'}))">
+    <div>
+      <div class="name">${esc(p.name)}</div>
+      <div class="meta">
+        <b>${p.price.toLocaleString()}원</b>
+        ${p.is_rocket ? '<span>🚀 로켓배송</span>' : ''}
+        ${p.category ? `<span>${esc(p.category)}</span>` : ''}
+        ${badge}
+      </div>
+      ${progress}
+    </div>
+    <div class="actions">
+      <button class="sm primary-ish" ${busy ? 'disabled' : ''} onclick="runOne(${p.product_id})">
+        ${p.has_video ? '다시 생성' : '영상 만들기'}
+      </button>
+      ${p.has_video ? `<button class="sm" onclick="openPreview(${p.product_id})">미리보기</button>` : ''}
+      <button class="sm danger" ${busy ? 'disabled' : ''} onclick="removeOne(${p.product_id})">삭제</button>
+    </div>
+  </div>`;
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function render() {
+  $('count').textContent = products.length + '개';
+  $('cards').innerHTML = products.length
+    ? products.map(cardHTML).join('')
+    : '<div class="empty">등록된 상품이 없습니다.<br>왼쪽에서 쿠팡 상품을 등록해 보세요.</div>';
+}
+
+async function loadProducts() {
+  products = await api('/api/products');
+  render();
+}
+
+async function runOne(id) {
+  try {
+    const job = await api(`/api/products/${id}/run`, {
+      method: 'POST',
+      body: JSON.stringify({ voice: $('f-voice').value }),
+    });
+    jobs[id] = job;
+    render();
+    poll(job.id, id);
+  } catch (e) { toast('시작 실패: ' + e.message); }
+}
+
+async function poll(jobId, productId) {
+  try {
+    const job = await api('/api/jobs/' + jobId);
+    jobs[productId] = job;
+    render();
+    if (job.status === 'running') return setTimeout(() => poll(jobId, productId), 1200);
+    if (job.status === 'done') toast('영상이 완성되었습니다');
+    else toast('생성 실패: ' + (job.error || '알 수 없는 오류'));
+    await loadProducts();
+  } catch (e) { toast('상태 확인 실패: ' + e.message); }
+}
+
+async function removeOne(id) {
+  if (!confirm('이 상품과 생성된 영상을 삭제할까요?')) return;
+  try {
+    await api(`/api/products/${id}`, { method: 'DELETE' });
+    delete jobs[id];
+    await loadProducts();
+    toast('삭제했습니다');
+  } catch (e) { toast('삭제 실패: ' + e.message); }
+}
+
+async function openPreview(id) {
+  try {
+    const meta = await api(`/api/products/${id}/meta`);
+    $('pv-title').textContent = meta.title;
+    $('pv-video').src = `/api/products/${id}/video`;
+    $('pv-t').textContent = meta.title;
+    $('pv-d').textContent = meta.description;
+    $('pv-h').textContent = (meta.hashtags || []).join(' ');
+    $('preview').showModal();
+  } catch (e) { toast('불러오기 실패: ' + e.message); }
+}
+
+$('preview').addEventListener('close', () => { $('pv-video').pause(); $('pv-video').src = ''; });
+
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-copy]');
+  if (!btn) return;
+  await navigator.clipboard.writeText($(btn.dataset.copy).textContent);
+  toast('복사했습니다');
+});
+
+$('addForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  try {
+    await api('/api/products', {
+      method: 'POST',
+      body: JSON.stringify({
+        url: $('f-url').value.trim(),
+        name: $('f-name').value.trim(),
+        price: Number($('f-price').value),
+        image_url: $('f-image').value.trim(),
+        category: $('f-category').value.trim() || '쇼핑',
+        deeplink_url: $('f-deeplink').value.trim() || null,
+        is_rocket: $('f-rocket').checked,
+      }),
+    });
+    e.target.reset();
+    await loadProducts();
+    toast('상품을 등록했습니다');
+  } catch (e) { toast('등록 실패: ' + e.message); }
+});
+
+$('runAll').addEventListener('click', () => {
+  const targets = products.filter(p => !p.running && p.status !== 'rendered');
+  if (!targets.length) return toast('생성할 상품이 없습니다');
+  targets.forEach(p => runOne(p.product_id));
+});
+
+loadEnv();
+loadProducts();
+setInterval(() => { if (!Object.values(jobs).some(j => j.status === 'running')) loadProducts(); }, 8000);
+</script>
+</body>
+</html>

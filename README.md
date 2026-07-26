@@ -12,6 +12,7 @@ YouTube Shorts / Instagram Reels / TikTok에 업로드하는 파이프라인입�
 - [x] **M1** 상품 수집: 파트너스 API 클라이언트(검색/베스트/골드박스/딥링크) + SQLite 저장 + CLI
 - [x] **M2** 대본 생성(Claude API + 템플릿 폴백) + Edge TTS 음성 + SRT 자막 타이밍
 - [x] **M3** FFmpeg 쇼츠 렌더링 (1080x1920, 블러 배경 + 줌인 + 제목/자막 번인 + BGM 믹싱)
+- [x] **웹 UI** 브라우저에서 상품 등록 → 생성 진행률 → 미리보기 → 메타데이터 복사
 - [ ] M4 파이프라인 통합
 - [ ] M5 YouTube 업로드
 - [ ] M6 Instagram / TikTok 업로드 + 스케줄러
@@ -28,6 +29,18 @@ cp .env.example .env   # 쿠팡 파트너스 키 입력
 `COUPANG_ACCESS_KEY`, `COUPANG_SECRET_KEY`를 넣어야 합니다.
 
 ## 사용법
+
+### 웹 화면 (권장)
+
+```bash
+cmm-auto web            # http://localhost:8000 자동 실행
+cmm-auto web --port 8100 --no-browser
+```
+
+브라우저에서 상품 등록 → 영상 생성(진행률 표시) → 미리보기 → 제목·설명·해시태그
+복사까지 클릭으로 처리합니다. 로컬 전용이라 인증이 없으니 외부에 공개하지 마세요.
+
+### 명령어
 
 ```bash
 # 상품 직접 등록 (파트너스 API 키 없이 사용 가능)

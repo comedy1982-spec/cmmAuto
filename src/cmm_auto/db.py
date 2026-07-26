@@ -129,6 +129,11 @@ class Database:
             ).fetchall()
         return [self._to_product(r) for r in rows]
 
+    def delete(self, product_id: int) -> bool:
+        cur = self.conn.execute("DELETE FROM products WHERE product_id = ?", (product_id,))
+        self.conn.commit()
+        return cur.rowcount > 0
+
     def exists(self, product_id: int) -> bool:
         return self.conn.execute(
             "SELECT 1 FROM products WHERE product_id = ?", (product_id,)

@@ -215,6 +215,26 @@ def run_cmd(
     typer.echo(f"\n완료 {done}건, 실패 {failed}건")
 
 
+@app.command()
+def web(
+    port: int = typer.Option(8000, "--port", "-p", help="포트 번호"),
+    host: str = typer.Option("127.0.0.1", "--host", help="바인딩 주소"),
+    no_browser: bool = typer.Option(False, "--no-browser", help="브라우저 자동 실행 안 함"),
+):
+    """브라우저에서 쓰는 웹 화면을 연다."""
+    import threading
+    import webbrowser
+
+    from .web.app import serve
+
+    url = f"http://{'localhost' if host == '127.0.0.1' else host}:{port}"
+    typer.echo(f"웹 화면 주소: {url}")
+    typer.echo("종료하려면 Ctrl+C 를 누르세요.")
+    if not no_browser:
+        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    serve(host=host, port=port)
+
+
 @app.command("list")
 def list_cmd(
     status: str = typer.Option(None, "--status", "-s", help=f"상태 필터 {STATUSES}"),

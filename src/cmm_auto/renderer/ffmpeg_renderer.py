@@ -13,6 +13,7 @@ import json
 import random
 import shutil
 import subprocess
+import sys
 from dataclasses import asdict
 from pathlib import Path
 
@@ -21,8 +22,17 @@ from ..scriptwriter.generator import VideoScript
 
 WIDTH, HEIGHT = 1080, 1920
 FPS = 30
-FONT = "NanumGothic"
 OUTRO_PAD = 1.2  # 마지막 문장 후 여유(초)
+
+# 운영체제별로 흔한 한글 폰트 (앞에서부터 설치된 것을 사용)
+KOREAN_FONTS = (
+    "NanumGothic",          # Linux/macOS (fonts-nanum)
+    "Malgun Gothic",        # Windows 기본
+    "AppleSDGothicNeo",     # macOS 기본
+    "NotoSansCJKkr",
+    "Noto Sans KR",
+    "WenQuanYi Zen Hei",    # 최후 폴백 (CJK 지원)
+)
 
 
 class RenderError(RuntimeError):
@@ -34,6 +44,25 @@ def ensure_ffmpeg() -> None:
         raise RenderError(
             "ffmpeg가 설치되어 있지 않습니다. https://ffmpeg.org 에서 설치 후 다시 실행하세요."
         )
+
+
+def detect_korean_font() -> str:
+    """설치된 한글 폰트를 찾는다. fc-list가 없는 환경(Windows)에서는 OS 기본값."""
+    if shutil.which("fc-list"):
+        try:
+            installed = subprocess.run(
+                ["fc-list", ":lang=ko", "family"], capture_output=True, text=True, timeout=10
+            ).stdout
+            for font in KOREAN_FONTS:
+                if font.lower().replace(" ", "") in installed.lower().replace(" ", ""):
+                    return font
+        except (subprocess.SubprocessError, OSError):
+            pass
+    if sys.platform == "win32":
+        return "Malgun Gothic"
+    if sys.platform == "darwin":
+        return "AppleSDGothicNeo"
+    return KOREAN_FONTS[0]
 
 
 def _run(cmd: list[str]) -> None:
@@ -98,10 +127,10 @@ def render_video(
     total_duration: float,
     out_path: Path,
     bgm_path: Path | None = None,
-    font: str = FONT,
+    font: str | None = None,
 ) -> Path:
     ensure_ffmpeg()
-    frames = max(int(total_duration * FPS), FPS)
+    font = font or detect_korean_font()
 
     title_file = out_path.parent / "title.txt"
     title_file.write_text(_wrap_title(title), encoding="utf-8")

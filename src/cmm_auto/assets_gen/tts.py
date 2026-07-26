@@ -15,6 +15,12 @@ from pathlib import Path
 import edge_tts
 
 DEFAULT_VOICE = "ko-KR-SunHiNeural"
+
+
+class TTSError(RuntimeError):
+    pass
+
+
 # 문장 사이 간격(초) — 렌더링 시 세그먼트 사이에 넣을 무음과 일치해야 한다
 SENTENCE_GAP = 0.35
 
@@ -58,7 +64,15 @@ async def synthesize_async(
     cursor = 0.0
     for i, text in enumerate(sentences):
         path = out_dir / f"seg_{i:02d}.mp3"
-        duration = await _synth_sentence(text, voice, rate, path)
+        try:
+            duration = await _synth_sentence(text, voice, rate, path)
+        except Exception as e:
+            raise TTSError(
+                f"음성 합성 실패 ({i + 1}번째 문장): {type(e).__name__}: {e}\n"
+                "  · 인터넷 연결을 확인하세요 (Edge TTS는 온라인 서비스입니다).\n"
+                "  · 회사/학교 네트워크나 VPN이 차단하는 경우가 있습니다. 다른 네트워크에서 시도해 보세요.\n"
+                "  · 보이스 이름이 맞는지 확인하세요 (예: ko-KR-SunHiNeural, ko-KR-InJoonNeural)."
+            ) from e
         segments.append(
             Segment(index=i, text=text, audio_path=str(path), start=cursor, duration=duration)
         )

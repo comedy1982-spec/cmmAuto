@@ -1,10 +1,10 @@
-"""CLI 진입점: cmm-auto collect / list"""
+"""CLI 진입점: cmm-auto add / collect / generate / render / list"""
 from __future__ import annotations
 
 import typer
 
 from .config import load_settings
-from .db import STATUSES, Database
+from .db import STATUSES, Database, Product
 from .collector.partners_api import PartnersClient
 from .collector.service import (
     CollectFilter,
@@ -28,6 +28,44 @@ def _print_result(label: str, r) -> None:
     typer.echo(
         f"[{label}] 조회 {r.fetched}건 → 신규 저장 {r.saved}건 "
         f"(중복 {r.skipped_duplicate}, 필터 제외 {r.skipped_filtered})"
+    )
+
+
+@app.command()
+def add(
+    url: str = typer.Option(..., "--url", "-u", help="쿠팡 상품 페이지 주소 (또는 파트너스 링크)"),
+    name: str = typer.Option(..., "--name", "-n", help="상품명"),
+    price: int = typer.Option(..., "--price", "-p", help="가격(원)"),
+    image: str = typer.Option(..., "--image", "-i", help="상품 이미지 주소"),
+    category: str = typer.Option("쇼핑", "--category", "-c", help="카테고리(해시태그용)"),
+    rocket: bool = typer.Option(False, "--rocket", help="로켓배송 상품이면 지정"),
+    deeplink: str = typer.Option(None, "--deeplink", help="파트너스 제휴 링크 (있으면)"),
+):
+    """상품을 직접 입력해 등록한다 (파트너스 API 키 없이 사용 가능)."""
+    import re
+    import time
+
+    settings = load_settings()
+    m = re.search(r"/products/(\d+)", url)
+    product_id = int(m.group(1)) if m else int(time.time() * 1000) % 10_000_000_000
+
+    with Database(settings.db_path) as db:
+        is_new = db.upsert_product(
+            Product(
+                product_id=product_id,
+                name=name,
+                price=price,
+                image_url=image,
+                product_url=url,
+                deeplink_url=deeplink,
+                category=category,
+                is_rocket=rocket,
+                source="manual",
+            )
+        )
+    typer.echo(
+        f"{'등록' if is_new else '갱신'} 완료: {product_id} | {price:,}원 | {name[:40]}\n"
+        f"다음 단계: cmm-auto generate --id {product_id}"
     )
 
 
@@ -124,6 +162,57 @@ def render(
                 continue
             db.set_status(p.product_id, "rendered")
             typer.echo(f"  ✓ {out}")
+
+
+@app.command("run")
+def run_cmd(
+    product_id: int = typer.Option(None, "--id", help="특정 상품 ID만 처리"),
+    all_pending: bool = typer.Option(False, "--all", "-a", help="아직 영상이 없는 상품 전부"),
+    voice: str = typer.Option("ko-KR-SunHiNeural", "--voice", help="Edge TTS 보이스"),
+    bgm_dir: str = typer.Option("assets/bgm", "--bgm-dir", help="BGM 디렉터리"),
+):
+    """대본 → 음성/자막 → 영상까지 한 번에 실행한다."""
+    from pathlib import Path
+
+    from .pipeline import product_dir, run_assets_stage, run_script_stage
+    from .renderer.ffmpeg_renderer import RenderError, ensure_ffmpeg, render_product
+
+    ensure_ffmpeg()
+    settings = load_settings()
+    done, failed = 0, 0
+    with Database(settings.db_path) as db:
+        if product_id is not None:
+            targets = [db.get(product_id)] if db.get(product_id) else []
+        elif all_pending:
+            targets = [
+                p
+                for s in ("collected", "scripted", "assets_ready")
+                for p in db.list_products(status=s, limit=1000)
+            ]
+        else:
+            typer.echo("--id 또는 --all 을 지정하세요.", err=True)
+            raise typer.Exit(1)
+
+        if not targets:
+            typer.echo("처리할 상품이 없습니다. 먼저 cmm-auto add 또는 collect 로 상품을 등록하세요.")
+            return
+
+        for p in targets:
+            typer.echo(f"▶ {p.product_id} {p.name[:36]}")
+            try:
+                script = run_script_stage(settings, db, p)
+                typer.echo(f"  1/3 대본({script.source}) {len(script.sentences)}문장 | {script.title}")
+                segments = run_assets_stage(settings, db, p, voice=voice)
+                typer.echo(f"  2/3 음성·자막 {len(segments)}문장, {segments[-1].end:.1f}초")
+                out = render_product(product_dir(settings, p.product_id), bgm_dir=Path(bgm_dir))
+                db.set_status(p.product_id, "rendered")
+                typer.echo(f"  3/3 ✓ 영상 완성 → {out}")
+                done += 1
+            except Exception as e:
+                typer.echo(f"  ✗ 실패: {e}", err=True)
+                failed += 1
+
+    typer.echo(f"\n완료 {done}건, 실패 {failed}건")
 
 
 @app.command("list")

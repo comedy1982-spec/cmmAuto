@@ -29,6 +29,12 @@ def test_wrap_title_wraps_and_truncates():
     assert lines[1].endswith("…")
 
 
+def test_detect_korean_font_returns_candidate():
+    from cmm_auto.renderer.ffmpeg_renderer import KOREAN_FONTS, detect_korean_font
+
+    assert detect_korean_font() in KOREAN_FONTS
+
+
 def test_pick_bgm_empty_dir(tmp_path):
     assert pick_bgm(tmp_path) is None
     assert pick_bgm(tmp_path / "없는폴더") is None

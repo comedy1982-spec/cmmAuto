@@ -2,6 +2,9 @@
 
 쿠팡 파트너스 API로 상품을 수집하고, 상품별 쇼츠 영상(9:16)을 자동 생성해
 YouTube Shorts / Instagram Reels / TikTok에 업로드하는 파이프라인입니다.
+
+**처음 사용하신다면 [QUICKSTART.md](QUICKSTART.md)를 보세요** — 설치부터 첫 영상까지
+단계별로 안내합니다 (파트너스 API 키 없이도 실행 가능).
 전체 설계는 [PLAN.md](PLAN.md)를 참고하세요.
 
 ## 현재 구현 상태
@@ -25,6 +28,16 @@ cp .env.example .env   # 쿠팡 파트너스 키 입력
 `COUPANG_ACCESS_KEY`, `COUPANG_SECRET_KEY`를 넣어야 합니다.
 
 ## 사용법
+
+```bash
+# 상품 직접 등록 (파트너스 API 키 없이 사용 가능)
+cmm-auto add --url "https://www.coupang.com/vp/products/123" \
+  --name "상품명" --price 29900 --image "이미지주소" --rocket
+
+# 대본 → 음성/자막 → 영상까지 한 번에
+cmm-auto run --id 123
+cmm-auto run --all
+```
 
 ```bash
 # 키워드 검색으로 상품 수집 (딥링크 자동 발급)

@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ECU SW 변경점 검증결과서</title>
+<style>
+:root{
+  --ink:#15181c; --muted:#5b6470; --line:#b9c0c9; --line-soft:#e2e6eb;
+  --head:#edf1f6; --accent:#1f4e79; --accent-soft:#dce7f2;
+  --pass:#137a45; --fail:#c02026; --na:#6b7280; --pend:#a85c07;
+  --paper:#ffffff; --desk:#7f858d;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--desk); color:var(--ink);
+  font-family:"Malgun Gothic","맑은 고딕","Apple SD Gothic Neo","Noto Sans KR",sans-serif;
+  font-size:10.5pt; line-height:1.55;
+  -webkit-print-color-adjust:exact; print-color-adjust:exact;
+}
+
+/* ── 화면 전용 툴바 ───────────────────────────── */
+.toolbar{
+  position:sticky; top:0; z-index:10; display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+  padding:10px 14px; background:#20262e; color:#e8ecf1; font-size:9.5pt;
+  box-shadow:0 1px 6px rgba(0,0,0,.4);
+}
+.toolbar label{color:#aab3bf}
+.toolbar select,.toolbar input{
+  font:inherit; padding:4px 7px; border:1px solid #454d58; border-radius:4px;
+  background:#2b323b; color:#e8ecf1;
+}
+.toolbar input{min-width:200px}
+.toolbar button{
+  font:inherit; padding:5px 14px; border:0; border-radius:4px; cursor:pointer;
+  background:var(--accent); color:#fff; font-weight:700;
+}
+.toolbar .spacer{flex:1}
+.toolbar .hint{color:#8b95a3}
+
+/* ── 문서(A4) ─────────────────────────────────── */
+.doc{
+  width:210mm; min-height:297mm; margin:14mm auto; padding:16mm 14mm 20mm;
+  background:var(--paper); box-shadow:0 3px 18px rgba(0,0,0,.35);
+}
+.doc-head{border-bottom:3px double var(--accent); padding-bottom:8px; margin-bottom:14px}
+.doc-head .cls{float:right; border:1px solid var(--fail); color:var(--fail);
+  padding:1px 8px; font-size:9pt; font-weight:700; border-radius:3px}
+.doc-head .kicker{color:var(--muted); font-size:9.5pt; letter-spacing:.06em}
+.doc-head h1{margin:2px 0 6px; font-size:19pt; letter-spacing:-.02em; color:var(--accent)}
+.doc-head .sub{color:var(--muted); font-size:10pt}
+
+h2{
+  margin:22px 0 8px; padding:5px 0 5px 10px; font-size:12.5pt; color:var(--accent);
+  border-left:5px solid var(--accent); background:linear-gradient(90deg,var(--accent-soft),transparent 65%);
+}
+h3{margin:14px 0 5px; font-size:10.8pt; color:#2a3a4a}
+h3::before{content:"▪ "; color:var(--accent)}
+p.note{margin:6px 0; font-size:9.3pt; color:var(--muted)}
+
+table{width:100%; border-collapse:collapse; margin:6px 0 4px; font-size:9.3pt}
+th,td{border:1px solid var(--line); padding:4px 6px; vertical-align:top; word-break:break-word}
+th{background:var(--head); font-weight:700; text-align:center; color:#2a3a4a}
+td.c{text-align:center}
+td.r{text-align:right}
+th.k,td.k{background:#f6f8fa; font-weight:700; text-align:left; width:24%; color:#33404e}
+tbody tr:nth-child(even) td:not(.k){background:#fbfcfd}
+table.tight{font-size:8.7pt}
+table.tight th,table.tight td{padding:3px 4px}
+.mono{font-family:Consolas,"D2Coding",monospace; font-size:.94em}
+.chg{color:var(--fail); font-weight:700}
+
+/* 판정 배지 */
+.b{display:inline-block; min-width:44px; padding:1px 6px; border-radius:3px;
+   font-size:8.6pt; font-weight:700; color:#fff; text-align:center; white-space:nowrap}
+.b.pass{background:var(--pass)} .b.fail{background:var(--fail)}
+.b.na{background:var(--na)} .b.pend{background:var(--pend)}
+.b.o{background:#fff; border:1px solid currentColor}
+.sev-Critical{color:#fff;background:#8b0f14} .sev-Major{color:#fff;background:var(--fail)}
+.sev-Minor{color:#fff;background:var(--pend)}
+.pill{display:inline-block;padding:1px 7px;border-radius:9px;font-size:8.5pt;font-weight:700;
+  background:var(--accent-soft); color:var(--accent)}
+
+/* 요약 대시보드 */
+.cards{display:grid; grid-template-columns:repeat(5,1fr); gap:8px; margin:10px 0}
+.card{border:1px solid var(--line); border-top:3px solid var(--accent); padding:8px 6px; text-align:center; background:#fbfcfd}
+.card .n{font-size:19pt; font-weight:800; line-height:1.1}
+.card .l{font-size:8.8pt; color:var(--muted)}
+.card.p .n{color:var(--pass)} .card.p{border-top-color:var(--pass)}
+.card.f .n{color:var(--fail)} .card.f{border-top-color:var(--fail)}
+.card.n .n{color:var(--na)}   .card.n{border-top-color:var(--na)}
+.card.w .n{color:var(--pend)} .card.w{border-top-color:var(--pend)}
+.bar{height:14px; border:1px solid var(--line); background:#eef1f4; display:flex; overflow:hidden}
+.bar i{display:block; height:100%}
+.bar i.p{background:var(--pass)} .bar i.f{background:var(--fail)}
+.bar i.n{background:var(--na)}   .bar i.w{background:var(--pend)}
+
+/* 결론 박스 */
+.verdict{border:2px solid var(--accent); padding:10px 14px; margin:8px 0; background:#f7fafd}
+.verdict .big{font-size:15pt; font-weight:800; color:var(--accent)}
+.risk{border-left:4px solid var(--pend); background:#fffaf2; padding:8px 12px; margin:8px 0; font-size:9.5pt}
+
+.sign td{height:56px; vertical-align:bottom}
+.sign .role{background:var(--head); text-align:center; font-weight:700; height:auto}
+footer.doc-foot{margin-top:24px; padding-top:6px; border-top:1px solid var(--line-soft);
+  font-size:8.6pt; color:var(--muted); display:flex; justify-content:space-between}
+tr.hide{display:none}
+
+/* ── 인쇄(A4) ─────────────────────────────────── */
+@page{ size:A4 portrait; margin:14mm 12mm 16mm; }
+@media print{
+  body{background:#fff; font-size:9.6pt}
+  .no-print{display:none !important}
+  .doc{width:auto; min-height:0; margin:0; padding:0; box-shadow:none}
+  h2{page-break-after:avoid}
+  thead{display:table-header-group}
+  tr{page-break-inside:avoid}
+  table,.verdict,.cards,.card,.risk{page-break-inside:avoid}
+  .page-break{page-break-before:always}
+  a{color:inherit; text-decoration:none}
+}
+@media screen and (max-width:800px){
+  .doc{width:auto; margin:0; padding:14px}
+  .cards{grid-template-columns:repeat(2,1fr)}
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════ 화면 전용 컨트롤 (인쇄 시 자동 제외) ═══════ -->
+<div class="toolbar no-print">
+  <label for="fCat">분류</label><select id="fCat"><option value="">전체</option></select>
+  <label for="fVer">판정</label><select id="fVer"><option value="">전체</option></select>
+  <input id="fTxt" type="search" placeholder="시험항목 / TC ID / 요구사항 ID 검색">
+  <span id="fCount" class="hint"></span>
+  <span class="spacer"></span>
+  <span class="hint">데이터는 하단 &lt;script id="report-data"&gt; JSON만 수정</span>
+  <button onclick="window.print()">🖨 인쇄 / PDF 저장</button>
+</div>
+
+<div class="doc">
+
+  <!-- ═══════ 표지 ═══════ -->
+  <div class="doc-head">
+    <span class="cls" id="hClass"></span>
+    <div class="kicker">ECU SOFTWARE CHANGE VALIDATION REPORT</div>
+    <h1 id="hTitle"></h1>
+    <div class="sub" id="hSub"></div>
+  </div>
+
+  <table>
+    <colgroup><col style="width:16%"><col style="width:34%"><col style="width:16%"><col style="width:34%"></colgroup>
+    <tbody id="tMeta"></tbody>
+  </table>
+
+  <h3>결재</h3>
+  <table class="sign">
+    <thead><tr id="signRole"></tr></thead>
+    <tbody><tr id="signBody"></tr><tr id="signName"></tr></tbody>
+  </table>
+
+  <h3>개정 이력</h3>
+  <table><thead><tr>
+    <th style="width:8%">Rev</th><th style="width:14%">일자</th><th style="width:14%">작성자</th><th>개정 내용</th>
+  </tr></thead><tbody id="tRev"></tbody></table>
+
+  <!-- ═══════ 1. 대상 ECU / SW 식별 ═══════ -->
+  <h2>1. 대상 ECU 및 SW 식별 정보</h2>
+  <table><thead><tr>
+    <th style="width:26%">항목</th><th style="width:27%">변경 전 (As-Is)</th>
+    <th style="width:27%">변경 후 (To-Be)</th><th style="width:20%">비고</th>
+  </tr></thead><tbody id="tIdent"></tbody></table>
+  <p class="note">※ Fingerprint DID 실측값은 부록 A 진단 로그로 증빙한다.</p>
+
+  <!-- ═══════ 2. 변경 개요 ═══════ -->
+  <h2>2. 변경 개요</h2>
+  <table><tbody id="tChange"></tbody></table>
+  <h3>변경 상세 내역</h3>
+  <table class="tight"><thead><tr>
+    <th style="width:6%">No</th><th style="width:24%">모듈 / 파일</th><th>변경 내용</th>
+    <th style="width:12%">유형</th><th style="width:10%">규모(LOC)</th>
+  </tr></thead><tbody id="tChangeDet"></tbody></table>
+
+  <!-- ═══════ 3. 영향도 분석 ═══════ -->
+  <h2>3. 영향도 분석 (Impact Analysis)</h2>
+  <table class="tight"><thead><tr>
+    <th style="width:16%">영역</th><th style="width:10%">영향도</th><th>분석 내용</th><th style="width:28%">대응 / 검증 조치</th>
+  </tr></thead><tbody id="tImpact"></tbody></table>
+
+  <h3>리소스 영향</h3>
+  <table class="tight"><thead><tr>
+    <th style="width:24%">항목</th><th style="width:16%">변경 전</th><th style="width:16%">변경 후</th>
+    <th style="width:16%">증감</th><th style="width:16%">기준(Limit)</th><th style="width:12%">판정</th>
+  </tr></thead><tbody id="tRes"></tbody></table>
+
+  <div class="risk" id="regScope"></div>
+
+  <!-- ═══════ 4. 검증 계획 ═══════ -->
+  <h2 class="page-break">4. 검증 계획 및 환경</h2>
+  <table><tbody id="tPlan"></tbody></table>
+  <h3>검증 환경 / 장비</h3>
+  <table class="tight"><thead><tr>
+    <th style="width:22%">구분</th><th style="width:34%">장비 / 환경</th><th style="width:22%">모델 / 버전</th><th>비고</th>
+  </tr></thead><tbody id="tEnv"></tbody></table>
+  <h3>판정 기준 (Pass / Fail Criteria)</h3>
+  <table class="tight"><tbody id="tCrit"></tbody></table>
+
+  <!-- ═══════ 5. 결과 요약 ═══════ -->
+  <h2>5. 검증 결과 요약</h2>
+  <div class="cards" id="cards"></div>
+  <div class="bar" id="bar"></div>
+  <p class="note" id="barNote"></p>
+  <table class="tight"><thead><tr>
+    <th style="width:26%">검증 분류</th><th style="width:10%">계획</th><th style="width:10%">실시</th>
+    <th style="width:10%">PASS</th><th style="width:10%">FAIL</th><th style="width:10%">N.A.</th>
+    <th style="width:10%">미실시</th><th style="width:14%">Pass율</th>
+  </tr></thead><tbody id="tCatSum"></tbody></table>
+
+  <!-- ═══════ 6. 상세 결과 ═══════ -->
+  <h2 class="page-break">6. 검증 항목 및 결과</h2>
+  <table class="tight" id="tblResult">
+    <colgroup>
+      <col style="width:3.5%"><col style="width:9%"><col style="width:9%"><col style="width:9%">
+      <col style="width:17%"><col style="width:17%"><col style="width:17%"><col style="width:6.5%">
+      <col style="width:6%"><col style="width:6%">
+    </colgroup>
+    <thead><tr>
+      <th>No</th><th>분류</th><th>요구사항 ID</th><th>TC ID</th><th>시험 조건 / 항목</th>
+      <th>기대 결과</th><th>실제 결과</th><th>판정</th><th>증빙</th><th>시험일<br>담당</th>
+    </tr></thead>
+    <tbody id="tResult"></tbody>
+  </table>
+
+  <!-- ═══════ 7. 추적성 ═══════ -->
+  <h2>7. 요구사항 추적성 매트릭스</h2>
+  <table class="tight"><thead><tr>
+    <th style="width:14%">요구사항 ID</th><th style="width:36%">요구사항 개요</th>
+    <th style="width:26%">연결 TC</th><th style="width:12%">커버</th><th style="width:12%">판정</th>
+  </tr></thead><tbody id="tTrace"></tbody></table>
+
+  <!-- ═══════ 8. NCR ═══════ -->
+  <h2>8. 부적합 및 결함 조치 현황 (NCR)</h2>
+  <table class="tight"><thead><tr>
+    <th style="width:8%">NCR ID</th><th style="width:8%">관련 TC</th><th style="width:18%">현상 / 재현 조건</th>
+    <th style="width:8%">심각도</th><th style="width:16%">원인</th><th style="width:18%">조치 내용</th>
+    <th style="width:8%">조치<br>SW</th><th style="width:8%">재검증</th><th style="width:8%">상태</th>
+  </tr></thead><tbody id="tNcr"></tbody></table>
+
+  <!-- ═══════ 9. 미실시 / 제외 ═══════ -->
+  <h2>9. 미실시 · 제외 항목 및 사유 (Deviation)</h2>
+  <table class="tight"><thead><tr>
+    <th style="width:10%">TC ID</th><th style="width:24%">항목</th><th>제외 / 미실시 사유</th>
+    <th style="width:14%">후속 계획</th><th style="width:12%">승인자</th>
+  </tr></thead><tbody id="tDev"></tbody></table>
+
+  <!-- ═══════ 10. 종합 판정 ═══════ -->
+  <h2>10. 종합 판정 및 결론</h2>
+  <div class="verdict">
+    <div>최종 판정 &nbsp;<span class="big" id="vFinal"></span></div>
+    <div id="vSummary" style="margin-top:6px"></div>
+  </div>
+  <table><tbody id="tConclusion"></tbody></table>
+  <div class="risk" id="vRisk"></div>
+
+  <!-- ═══════ 11. 승인 ═══════ -->
+  <h2>11. 승인</h2>
+  <table class="tight"><thead><tr>
+    <th style="width:20%">역할</th><th style="width:18%">소속</th><th style="width:16%">성명</th>
+    <th style="width:16%">일자</th><th style="width:30%">서명</th>
+  </tr></thead><tbody id="tAppr"></tbody></table>
+
+  <!-- ═══════ 12. 부록 ═══════ -->
+  <h2>12. 첨부 · 참조 문서</h2>
+  <table class="tight"><thead><tr>
+    <th style="width:8%">번호</th><th style="width:34%">명칭</th><th style="width:34%">파일 / 문서번호</th><th>비고</th>
+  </tr></thead><tbody id="tAppx"></tbody></table>
+
+  <h3>용어 및 약어</h3>
+  <table class="tight"><tbody id="tAbbr"></tbody></table>
+
+  <footer class="doc-foot">
+    <span id="fLeft"></span><span id="fRight"></span>
+  </footer>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     ▼▼▼  이 JSON만 수정하면 새 검증결과서가 됩니다 (양식 고정)  ▼▼▼
+     ══════════════════════════════════════════════════════════════ -->
+<script id="report-data" type="application/json">
+{
+  "meta": {
+    "docNo": "VR-BCM-2026-014",
+    "title": "BCM SW 변경점 검증결과서",
+    "subtitle": "도어 스위치 채터링 오검출 개선 (DTC B1234) — SW V1.03 → V1.04",
+    "rev": "1.0",
+    "issueDate": "2026-08-28",
+    "classification": "대외비",
+    "project": "XX1 PE (2026MY)",
+    "org": "전장검증팀 / 바디제어파트",
+    "author": "김검증",
+    "reviewer": "이책임",
+    "approver": "박팀장",
+    "period": "2026-08-18 ~ 2026-08-27"
+  },
+  "signOff": [
+    {"role":"작성","name":"김검증"},
+    {"role":"검토","name":"이책임"},
+    {"role":"기능안전","name":"최안전"},
+    {"role":"품질","name":"정품질"},
+    {"role":"승인","name":"박팀장"}
+  ],
+  "revisions": [
+    {"rev":"0.1","date":"2026-08-20","author":"김검증","desc":"초안 작성 (검증 계획 및 영향도 분석)"},
+    {"rev":"0.9","date":"2026-08-26","author":"김검증","desc":"1차 검증 결과 반영, NCR-001 등록"},
+    {"rev":"1.0","date":"2026-08-28","author":"김검증","desc":"NCR-001 조치 후 재검증 결과 반영, 종합 판정 확정"}
+  ],
+  "identification": [
+    {"item":"차종 / 프로젝트","before":"XX1 PE (2026MY)","after":"XX1 PE (2026MY)","note":""},
+    {"item":"ECU 명 / 약어","before":"Body Control Module (BCM)","after":"Body Control Module (BCM)","note":""},
+    {"item":"공급사 (Tier-1)","before":"○○전자","after":"○○전자","note":""},
+    {"item":"HW Part No.","before":"95400-AA100","after":"95400-AA100","note":"HW 변경 없음"},
+    {"item":"SW Part No.","before":"95400-AA100-S103","after":"95400-AA100-S104","chg":true,"note":"양산 적용 대상"},
+    {"item":"Application SW Ver.","before":"V1.03","after":"V1.04","chg":true,"note":"DID F1 89"},
+    {"item":"Bootloader Ver.","before":"BL 2.01","after":"BL 2.01","note":"변경 없음"},
+    {"item":"Calibration Ver.","before":"CAL 1.07","after":"CAL 1.07","note":"변경 없음"},
+    {"item":"Application CRC32","before":"0x8A31F0C2","after":"0x5D77B419","chg":true,"note":"플래시 실측"},
+    {"item":"Build ID / 일시","before":"b20260602-1731","after":"b20260814-0942","chg":true,"note":"CI 빌드 #4472"},
+    {"item":"툴체인 / 컴파일러","before":"GHS MULTI 2021.1.4","after":"GHS MULTI 2021.1.4","note":"동일 (재현성 확보)"},
+    {"item":"CAN DB (ARXML/DBC)","before":"XX1_BODY_v3.2.arxml","after":"XX1_BODY_v3.2.arxml","note":"변경 없음"},
+    {"item":"진단 사양 (ODX)","before":"BCM_ODX_v2.4","after":"BCM_ODX_v2.4","note":"변경 없음"},
+    {"item":"Fingerprint DID","before":"F1 90 / F1 8C / F1 89","after":"F1 90 / F1 8C / F1 89","note":"실측값 부록 A"}
+  ],
+  "change": [
+    {"k":"변경 요청 근거","v":"필드 클레임 CLM-2026-0731 (도어 열림 경고등 순간 점멸) / 이슈 티켓 BCM-2291"},
+    {"k":"설계변경 번호","v":"ECO-2026-0812-BCM"},
+    {"k":"변경 유형","v":"결함 수정 (Bug Fix) — 소프트웨어 로직 변경"},
+    {"k":"발생 원인 (Root Cause)","v":"도어 스위치 입력의 기계적 채터링(20~80ms)이 디바운스 필터(현행 30ms)를 통과하여 순간 개폐로 오인식 → DTC B1234 오검출 및 경고등 순간 점멸"},
+    {"k":"변경 내용 요약","v":"도어 스위치 입력 디바운스 시간을 30ms → 200ms로 상향하고, 상태 천이 확정 후에만 DTC 판정 카운터를 증가하도록 판정 로직 수정"},
+    {"k":"변경 범위","v":"Door_Input 모듈 2개 파일, DTC 판정 모듈 1개 파일 (총 3 파일 / 47 LOC)"},
+    {"k":"기존 버전과의 호환성","v":"CAN 매트릭스·진단 사양 변경 없음 → 상위 호환 유지, 서비스 리프로그래밍 가능"}
+  ],
+  "changeDetail": [
+    {"file":"door_input.c / .h","desc":"DEBOUNCE_TIME_MS 30 → 200, 상태 확정 플래그(bDoorStable) 추가","type":"수정","loc":"32"},
+    {"file":"dtc_body.c","desc":"B1234 판정 조건에 bDoorStable 조건 추가, Fail 카운터 임계 3 → 5","type":"수정","loc":"11"},
+    {"file":"door_input_cfg.h","desc":"디바운스 파라미터 캘리브레이션 상수화","type":"추가","loc":"4"}
+  ],
+  "impact": [
+    {"area":"기능","level":"중","desc":"도어 열림/닫힘 감지 응답 시간 최대 170ms 증가. 실내등·웰컴라이트·도어락 연동 기능이 동일 입력을 사용","action":"관련 5개 기능 회귀시험 전수 실시 (TC-REG-001~003)"},
+    {"area":"인터페이스 (CAN)","level":"저","desc":"BCM_DoorStatus 신호 값/주기 변경 없음, 천이 시점만 지연","action":"통신 신호 타이밍 계측 (TC-COM-001)"},
+    {"area":"타 ECU","level":"저","desc":"IBU(실내등), SJB(도어락)가 DoorStatus 수신. 200ms 지연은 각 수신 ECU 타임아웃(1000ms) 대비 여유 있음","action":"실차 연동 확인 항목 포함"},
+    {"area":"진단 (DTC)","level":"중","desc":"B1234 판정 조건 변경. 실제 고장 검출 지연 최대 1.0s (5회 × 200ms)","action":"DTC 발생/소거 및 Freeze Frame 검증 (TC-DIA-002/003)"},
+    {"area":"기능안전 (ISO 26262)","level":"저","desc":"해당 기능 QM 등급, 안전목표(Safety Goal) 미연계. FMEA 재검토 결과 신규 고장모드 없음","action":"기능안전 담당 검토 완료 (FS-REV-2026-088)"},
+    {"area":"사이버보안 (ISO 21434 / R155)","level":"없음","desc":"통신·인증·부트로더 변경 없음. TARA 재수행 대상 아님","action":"보안 담당 영향 없음 확인"},
+    {"area":"법규 / 인증","level":"없음","desc":"OBD·배출·형식승인 무관. UN R156 SW 업데이트 관리 절차상 RXSWIN 변경 대상 아님","action":"인증팀 확인서 첨부 (부록 D)"},
+    {"area":"생산 / 서비스","level":"중","desc":"양산 라인 및 서비스 리프로그래밍 동시 적용 필요","action":"적용 시점 협의 완료 (2026-09-15 생산분)"}
+  ],
+  "resources": [
+    {"item":"ROM 사용량","before":"412.3 KB (78.6%)","after":"412.5 KB (78.6%)","delta":"+0.2 KB","limit":"≤ 90%","verdict":"PASS"},
+    {"item":"RAM 사용량","before":"38.1 KB (59.5%)","after":"38.2 KB (59.7%)","delta":"+0.1 KB","limit":"≤ 80%","verdict":"PASS"},
+    {"item":"Stack 최대 사용","before":"2,140 B (52.2%)","after":"2,148 B (52.4%)","delta":"+8 B","limit":"≤ 70%","verdict":"PASS"},
+    {"item":"CPU Load (평균)","before":"67.9%","after":"68.2%","delta":"+0.3%p","limit":"≤ 70%","verdict":"PASS"},
+    {"item":"CAN 버스 부하","before":"41.2%","after":"41.2%","delta":"±0%","limit":"≤ 60%","verdict":"PASS"}
+  ],
+  "regressionScope": "<b>회귀시험 범위 결정 근거 :</b> 변경 모듈(Door_Input, DTC 판정)이 직접 호출·참조되는 기능 5종과, 동일 입력 신호를 소비하는 연동 기능 3종을 회귀 대상으로 선정하였다. 통신 매트릭스·부트로더·보안 영역은 변경 및 의존성이 없어 대상에서 제외하고, 리프로그래밍 항목은 SW P/N 변경에 따라 필수 항목으로 포함한다. (영향도 분석 결과 기반, 검증 책임자 승인)",
+  "plan": [
+    {"k":"검증 목적","v":"SW V1.04 변경점의 요구사항 충족 여부 및 기존 기능 무결성(회귀) 확인, 양산 적용 가능 여부 판정"},
+    {"k":"검증 범위","v":"변경점 직접 검증 / 회귀 / 진단 / 통신 / 전원·환경 / 리프로그래밍 / 성능 / 정적분석 (총 8개 분류)"},
+    {"k":"검증 레벨","v":"Unit(공급사 수행 결과 검토) → Integration(벤치) → HIL → 실차"},
+    {"k":"검증 기간","v":"2026-08-18 ~ 2026-08-27 (재검증 2026-08-27 포함)"},
+    {"k":"검증 장소","v":"○○연구소 전장시험동 HIL Lab #3 / 실차동 A-Bay"},
+    {"k":"시험 샘플","v":"BCM 3 EA (S/N: BCM-26-0142, 0143, 0151), 실차 1대 (테스트카 TC-XX1-07)"},
+    {"k":"수행 담당","v":"김검증(주관), 한시험(HIL), 오차량(실차)"}
+  ],
+  "environment": [
+    {"cat":"HIL 시스템","name":"dSPACE SCALEXIO Body HIL","ver":"RCP&HIL 2024-A","note":"Rack #3"},
+    {"cat":"버스 분석","name":"Vector CANoe","ver":"17.0 SP3 / VN1640A","note":"테스트 스펙 BCM_TS_v2.6"},
+    {"cat":"진단 툴","name":"Vector CANdelaStudio / vFlash","ver":"17.0","note":"ODX v2.4 기반"},
+    {"cat":"계측","name":"Keysight DSOX3024T 오실로스코프","ver":"—","note":"신호 타이밍 계측"},
+    {"cat":"전원 공급","name":"EA-PSI 9080-40 프로그래머블 전원","ver":"—","note":"ISO 16750-2 파형"},
+    {"cat":"정적분석","name":"Perforce QAC + MISRA C:2012","ver":"QAC 2023.2","note":"CI 파이프라인 연동"},
+    {"cat":"커버리지","name":"Vector VectorCAST","ver":"2023 SP4","note":"C0/C1 측정"}
+  ],
+  "criteria": [
+    {"k":"PASS","v":"기대 결과와 실제 결과가 판정 허용범위 내에서 일치하고, 시험 중 예기치 않은 DTC·리셋·통신 단절이 발생하지 않은 경우"},
+    {"k":"FAIL","v":"기대 결과 불일치, 또는 시험 중 미계획 DTC 발생·ECU 리셋·통신 단절이 1회 이상 발생한 경우 (NCR 등록 필수)"},
+    {"k":"N.A.","v":"본 변경점과 무관하여 시험 대상에서 제외된 항목 (제9장에 사유 기재)"},
+    {"k":"미실시","v":"일정·설비 사유로 본 Rev 시점에 수행하지 못한 항목 (제9장에 후속 계획 기재)"},
+    {"k":"종합 판정","v":"Critical/Major NCR 전건 Closed 이고 필수 항목 FAIL 0건이면 '적합', Minor NCR 잔존 시 '조건부 적합', 그 외 '부적합'"}
+  ],
+  "results": [
+    {"cat":"변경점 검증","req":"REQ-BCM-1120","tc":"TC-CHG-001","cond":"도어 스위치 입력 50ms 주기 채터링 20회 인가","exp":"도어 상태 천이 없음, DTC B1234 미발생","act":"상태 천이 없음, DTC 미발생 (10회 반복 동일)","verdict":"PASS","ev":"부록 A-1","date":"08-19","by":"한시험"},
+    {"cat":"변경점 검증","req":"REQ-BCM-1120","tc":"TC-CHG-002","cond":"디바운스 시간 실측 (스위치 ON 유지 → 상태 반영 시점)","exp":"200ms ± 20ms","act":"203.4 ms (평균 30회)","verdict":"PASS","ev":"부록 A-2","date":"08-19","by":"한시험"},
+    {"cat":"변경점 검증","req":"REQ-BCM-1121","tc":"TC-CHG-003","cond":"실제 도어 개방 (500ms 이상 유지)","exp":"정상 개방 감지, DoorStatus=OPEN 송신","act":"정상 감지, 송신 확인","verdict":"PASS","ev":"부록 A-3","date":"08-19","by":"한시험"},
+    {"cat":"변경점 검증","req":"REQ-BCM-1122","tc":"TC-CHG-004","cond":"실제 고장(스위치 단선) 주입 시 DTC 검출","exp":"5회 판정 후 B1234 확정 (≤ 1.5s)","act":"1.02s 후 확정 저장","verdict":"PASS","ev":"부록 A-4","date":"08-19","by":"한시험"},
+    {"cat":"회귀","req":"REQ-BCM-0210","tc":"TC-REG-001","cond":"도어 개방 연동 실내등 점등/소등","exp":"개방 시 즉시 점등, 폐쇄 30s 후 소등","act":"사양 일치","verdict":"PASS","ev":"부록 B-1","date":"08-20","by":"한시험"},
+    {"cat":"회귀","req":"REQ-BCM-0233","tc":"TC-REG-002","cond":"도어락 연동 (주행 중 오토락 / 도어 개방 시 언락)","exp":"사양서 5.3절 시퀀스 준수","act":"사양 일치","verdict":"PASS","ev":"부록 B-2","date":"08-20","by":"한시험"},
+    {"cat":"회귀","req":"REQ-BCM-0451","tc":"TC-REG-003","cond":"웰컴 라이트 시퀀스 (스마트키 접근 → 도어 개방)","exp":"도어 개방 후 웰컴 시퀀스 정상 종료","act":"도어 개방 직후 웰컴 라이트 300ms 잔존 후 소등 (사양: 즉시 소등)","verdict":"FAIL","ev":"NCR-001","date":"08-21","by":"한시험"},
+    {"cat":"회귀","req":"REQ-BCM-0451","tc":"TC-REG-003R","cond":"[재시험] NCR-001 조치 SW 적용 후 웰컴 라이트 시퀀스","exp":"도어 개방 후 즉시 소등","act":"즉시 소등 확인 (20회 반복 동일)","verdict":"PASS","ev":"부록 B-3","date":"08-27","by":"한시험"},
+    {"cat":"회귀","req":"REQ-BCM-0288","tc":"TC-REG-004","cond":"세이프티 파워윈도우 / 도어 연동 동작","exp":"기존 사양 유지","act":"사양 일치","verdict":"PASS","ev":"부록 B-4","date":"08-20","by":"한시험"},
+    {"cat":"진단","req":"REQ-DIA-011","tc":"TC-DIA-001","cond":"UDS 0x22 — DID F1 90/F1 8C/F1 89 읽기","exp":"변경 SW 버전 V1.04 응답","act":"F1 89 = 'V1.04' 정상 응답","verdict":"PASS","ev":"부록 A-5","date":"08-21","by":"김검증"},
+    {"cat":"진단","req":"REQ-DIA-014","tc":"TC-DIA-002","cond":"B1234 고장 주입 → 해소 → 0x14 소거","exp":"발생/치유/소거 상태 정상 천이","act":"정상 천이 확인","verdict":"PASS","ev":"부록 A-6","date":"08-21","by":"김검증"},
+    {"cat":"진단","req":"REQ-DIA-016","tc":"TC-DIA-003","cond":"B1234 Freeze Frame 저장 데이터 확인","exp":"사양서 지정 5개 항목 저장","act":"5개 항목 정상 저장","verdict":"PASS","ev":"부록 A-7","date":"08-21","by":"김검증"},
+    {"cat":"진단","req":"REQ-DIA-021","tc":"TC-DIA-004","cond":"0x27 SecurityAccess Seed/Key 인증","exp":"정상 인증 및 오인증 3회 후 지연","act":"사양 일치","verdict":"PASS","ev":"부록 A-8","date":"08-21","by":"김검증"},
+    {"cat":"통신","req":"REQ-COM-004","tc":"TC-COM-001","cond":"BCM_DoorStatus 송신 주기 및 신호값 계측","exp":"100ms ± 10%, 신호 매핑 일치","act":"100.2ms, 매핑 일치","verdict":"PASS","ev":"부록 C-1","date":"08-22","by":"한시험"},
+    {"cat":"통신","req":"REQ-COM-009","tc":"TC-COM-002","cond":"Network Management 슬립/웨이크업","exp":"NM 사양 v2.1 준수, 슬립 진입 5s 이내","act":"4.2s 슬립 진입, 웨이크업 정상","verdict":"PASS","ev":"부록 C-2","date":"08-22","by":"한시험"},
+    {"cat":"통신","req":"REQ-COM-013","tc":"TC-COM-003","cond":"Bus-off 발생 후 복구 동작","exp":"사양 시간 내 자동 복구, U-code DTC 저장","act":"복구 및 DTC 정상","verdict":"PASS","ev":"부록 C-3","date":"08-22","by":"한시험"},
+    {"cat":"전원·환경","req":"REQ-PWR-002","tc":"TC-PWR-001","cond":"동작 전압 범위 9V ~ 16V 스윕","exp":"전 구간 정상 동작, 리셋 없음","act":"정상 동작","verdict":"PASS","ev":"부록 C-4","date":"08-25","by":"한시험"},
+    {"cat":"전원·환경","req":"REQ-PWR-007","tc":"TC-PWR-002","cond":"슬립 상태 암전류 측정 (25℃)","exp":"≤ 1.0 mA","act":"0.82 mA","verdict":"PASS","ev":"부록 C-5","date":"08-25","by":"한시험"},
+    {"cat":"전원·환경","req":"REQ-PWR-011","tc":"TC-PWR-003","cond":"ISO 16750-2 Pulse 4 (크랭킹) 인가","exp":"리셋·기능 상실 없음","act":"정상 유지","verdict":"PASS","ev":"부록 C-6","date":"08-25","by":"한시험"},
+    {"cat":"리프로그래밍","req":"REQ-FLS-001","tc":"TC-FLS-001","cond":"V1.03 → V1.04 UDS 리프로그래밍 (vFlash)","exp":"정상 완료 ≤ 90s, CRC 일치","act":"71s 완료, CRC 0x5D77B419 일치","verdict":"PASS","ev":"부록 D-1","date":"08-26","by":"김검증"},
+    {"cat":"리프로그래밍","req":"REQ-FLS-004","tc":"TC-FLS-002","cond":"전송 중 전원 차단 후 재시도","exp":"부트로더 모드 유지, 재플래시 성공","act":"재플래시 성공 (5회 반복)","verdict":"PASS","ev":"부록 D-2","date":"08-26","by":"김검증"},
+    {"cat":"리프로그래밍","req":"REQ-FLS-006","tc":"TC-FLS-003","cond":"V1.04 → V1.03 롤백","exp":"롤백 성공 및 기능 정상","act":"롤백 성공","verdict":"PASS","ev":"부록 D-3","date":"08-26","by":"김검증"},
+    {"cat":"성능·타이밍","req":"REQ-PRF-003","tc":"TC-PRF-001","cond":"최대 부하 시나리오 CPU Load 측정","exp":"≤ 70%","act":"68.2%","verdict":"PASS","ev":"부록 E-1","date":"08-26","by":"한시험"},
+    {"cat":"성능·타이밍","req":"REQ-PRF-006","tc":"TC-PRF-002","cond":"10ms Task 최대 지터 측정","exp":"≤ 2.0 ms","act":"1.3 ms","verdict":"PASS","ev":"부록 E-2","date":"08-26","by":"한시험"},
+    {"cat":"정적분석","req":"REQ-QA-001","tc":"TC-STA-001","cond":"MISRA C:2012 정적분석 (변경 파일)","exp":"신규 Required 위반 0건","act":"신규 위반 0건 (Advisory 2건 승인 처리)","verdict":"PASS","ev":"부록 F-1","date":"08-18","by":"김검증"},
+    {"cat":"정적분석","req":"REQ-QA-004","tc":"TC-STA-002","cond":"변경 모듈 단위테스트 커버리지","exp":"C0 100% / C1 ≥ 90%","act":"C0 100% / C1 92.4%","verdict":"PASS","ev":"부록 F-2","date":"08-18","by":"김검증"},
+    {"cat":"정적분석","req":"REQ-QA-007","tc":"TC-STA-003","cond":"EMC 시험 (방사 내성)","exp":"기존 결과 유효성 확인","act":"HW 변경 없어 기존 인증 결과 승계","verdict":"N.A.","ev":"—","date":"—","by":"—"},
+    {"cat":"실차","req":"REQ-VEH-002","tc":"TC-VEH-001","cond":"혹서 조건(45℃) 실차 내구 24h","exp":"기능 이상 및 DTC 없음","act":"—","verdict":"미실시","ev":"—","date":"—","by":"—"}
+  ],
+  "requirements": [
+    {"id":"REQ-BCM-1120","desc":"도어 스위치 입력은 200ms 디바운스 후 상태를 확정한다"},
+    {"id":"REQ-BCM-1121","desc":"도어 개방 확정 시 DoorStatus 신호를 즉시 갱신한다"},
+    {"id":"REQ-BCM-1122","desc":"도어 스위치 고장은 5회 연속 판정 후 B1234로 확정한다"},
+    {"id":"REQ-BCM-0210","desc":"[기존] 도어 개방 연동 실내등 제어"},
+    {"id":"REQ-BCM-0233","desc":"[기존] 도어락 오토락/언락 시퀀스"},
+    {"id":"REQ-BCM-0451","desc":"[기존] 웰컴 라이트 시퀀스"},
+    {"id":"REQ-BCM-0288","desc":"[기존] 세이프티 파워윈도우 연동"}
+  ],
+  "ncr": [
+    {"id":"NCR-001","tc":"TC-REG-003","phenom":"도어 개방 후 웰컴 라이트가 300ms 잔존 후 소등 (사양: 즉시 소등)","repro":"스마트키 접근 → 5s 이내 도어 개방 시 100% 재현","sev":"Major","cause":"웰컴 라이트 종료 트리거가 디바운스 이전 원시 입력을 참조하고 있어, 디바운스 200ms 상향에 따라 종료 판정이 지연됨","action":"welcome_light.c 종료 트리거를 확정 상태(bDoorStable) 참조로 변경","fixVer":"V1.04 (b20260814-0942)","retest":"PASS","status":"Closed","owner":"공급사 ○○전자"},
+    {"id":"NCR-002","tc":"TC-CHG-002","phenom":"디바운스 실측값이 사양 대비 평균 3.4ms 초과 (203.4ms / 사양 200ms ± 20ms)","repro":"상시 재현 (허용 범위 내)","sev":"Minor","cause":"10ms 주기 태스크 스케줄링에 의한 양자화 오차","action":"허용 범위 내 편차로 리스크 수용. 차기 개선 백로그(BCM-2310) 등록","fixVer":"—","retest":"—","status":"Open (리스크 수용)","owner":"설계팀"}
+  ],
+  "deviations": [
+    {"tc":"TC-STA-003","item":"EMC 방사 내성 시험","reason":"HW 및 통신 회로 변경이 없어 기존 인증 결과(EMC-2025-114)를 승계. 시험 대상에서 제외","plan":"해당 없음","approver":"정품질 (2026-08-18)"},
+    {"tc":"TC-VEH-001","item":"혹서 조건 실차 24h 내구","reason":"실차 시험동 일정 중복으로 본 Rev 시점 미실시. HIL 온도 프로파일 시험으로 1차 리스크 확인 완료","plan":"2026-09-05 실시 후 Rev 1.1로 결과 추가. 양산 적용 전 완료 조건","approver":"박팀장 (2026-08-27)"}
+  ],
+  "conclusion": {
+    "final": "조건부 적합 (Conditionally Accepted)",
+    "summary": "변경점 직접 검증 4항목 및 회귀 4항목을 포함한 전 검증 항목에서 필수 요구사항을 충족하였다. 1차 검증에서 발견된 Major 부적합 1건(NCR-001)은 조치 후 재검증(TC-REG-003R)에서 PASS 확인되었으며, 잔존 Minor 부적합 1건(NCR-002)은 허용 범위 내 편차로 리스크 수용 처리하였다.",
+    "rows": [
+      {"k":"적용 가능 SW","v":"95400-AA100-S104 / App V1.04 / CRC32 0x5D77B419"},
+      {"k":"양산 적용 시점","v":"2026-09-15 생산분부터 적용 (단, 조건부 승인 조건 충족 시)"},
+      {"k":"적용 대상","v":"XX1 PE 전 트림 (2026MY) — 국내/북미 공통"},
+      {"k":"서비스 리프로그래밍","v":"가능. 진단 사양·CAN 매트릭스 변경 없어 기존 서비스 장비로 적용 가능"},
+      {"k":"롤백 가능 여부","v":"가능 (TC-FLS-003 검증 완료, V1.03 복귀 가능)"},
+      {"k":"조건부 승인 조건","v":"① TC-VEH-001 실차 내구 시험 완료 및 PASS (2026-09-05 예정) ② 결과를 본 문서 Rev 1.1로 갱신하여 재승인"}
+    ],
+    "risk": "<b>잔여 리스크 :</b> 디바운스 시간 상향(30→200ms)에 따라 도어 개방 인지가 최대 170ms 지연된다. 연동 ECU 타임아웃(1000ms) 및 사용자 체감 기준(300ms) 대비 여유가 확보되어 수용 가능한 수준으로 판단하나, 초기 양산 3개월간 필드 클레임 모니터링을 품질팀에서 병행한다. (모니터링 계획 QM-2026-0902)"
+  },
+  "approvals": [
+    {"role":"검증 담당","dept":"전장검증팀","name":"김검증","date":"2026-08-28"},
+    {"role":"검증 책임","dept":"전장검증팀","name":"이책임","date":"2026-08-28"},
+    {"role":"설계 담당","dept":"바디제어설계팀","name":"조설계","date":"2026-08-28"},
+    {"role":"기능안전 담당","dept":"기능안전팀","name":"최안전","date":"2026-08-28"},
+    {"role":"품질 담당","dept":"전장품질팀","name":"정품질","date":"2026-08-28"},
+    {"role":"최종 승인","dept":"바디제어파트","name":"박팀장","date":"2026-08-28"}
+  ],
+  "appendix": [
+    {"name":"변경점 검증 로그 (CANoe)","file":"A_TC-CHG_20260819.blf / .asc","note":"A-1 ~ A-8"},
+    {"name":"회귀시험 로그 및 영상","file":"B_TC-REG_20260820.zip","note":"B-1 ~ B-4"},
+    {"name":"통신·전원 계측 데이터","file":"C_MEAS_20260822.zip","note":"오실로스코프 파형 포함"},
+    {"name":"리프로그래밍 시험 로그","file":"D_FLASH_20260826.log","note":"vFlash 세션 로그"},
+    {"name":"성능 측정 리포트","file":"E_PERF_V104.pdf","note":"CPU Load / 지터"},
+    {"name":"정적분석 · 커버리지 리포트","file":"F_QAC_VCAST_V104.pdf","note":"MISRA / C0·C1"},
+    {"name":"SW 릴리즈 노트 및 변경 diff","file":"BCM_V104_ReleaseNote.pdf","note":"공급사 제출본"},
+    {"name":"기능안전 영향 검토서","file":"FS-REV-2026-088","note":"참조 문서"},
+    {"name":"이전 Rev 검증결과서","file":"VR-BCM-2026-009 (V1.03)","note":"참조 문서"}
+  ],
+  "abbreviations": [
+    {"k":"BCM","v":"Body Control Module — 바디 제어 모듈"},
+    {"k":"DTC","v":"Diagnostic Trouble Code — 진단 고장 코드"},
+    {"k":"UDS","v":"Unified Diagnostic Services (ISO 14229)"},
+    {"k":"HIL","v":"Hardware In the Loop"},
+    {"k":"NCR","v":"Non-Conformance Report — 부적합 보고서"},
+    {"k":"ECO","v":"Engineering Change Order — 설계변경 지시"},
+    {"k":"RXSWIN","v":"Software Identification Number (UN R156)"},
+    {"k":"TARA","v":"Threat Analysis and Risk Assessment (ISO/SAE 21434)"}
+  ]
+}
+</script>
+
+<script>
+(function(){
+  "use strict";
+  var D = JSON.parse(document.getElementById('report-data').textContent);
+  var VC = {'PASS':'pass','FAIL':'fail','N.A.':'na','미실시':'pend'};
+
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function set(id, html){ var e=document.getElementById(id); if(e) e.innerHTML=html; }
+  function badge(v){ return '<span class="b '+(VC[v]||'na')+'">'+esc(v)+'</span>'; }
+  function rows(arr, fn){ return (arr||[]).map(fn).join(''); }
+  function kv(arr){ return rows(arr, function(r){
+    return '<tr><td class="k">'+esc(r.k)+'</td><td>'+r.v+'</td></tr>'; }); }
+
+  /* ── 표지 / 메타 ─────────────────────────────── */
+  var m = D.meta;
+  set('hClass', esc(m.classification));
+  set('hTitle', esc(m.title));
+  set('hSub', esc(m.subtitle));
+  document.title = m.docNo + ' ' + m.title;
+  set('tMeta',
+    '<tr><td class="k">문서번호</td><td class="mono">'+esc(m.docNo)+'</td>'
+      +'<td class="k">개정 번호 (Rev)</td><td>'+esc(m.rev)+'</td></tr>'
+   +'<tr><td class="k">프로젝트</td><td>'+esc(m.project)+'</td>'
+      +'<td class="k">발행일</td><td>'+esc(m.issueDate)+'</td></tr>'
+   +'<tr><td class="k">작성 부서</td><td>'+esc(m.org)+'</td>'
+      +'<td class="k">검증 기간</td><td>'+esc(m.period)+'</td></tr>'
+   +'<tr><td class="k">작성자</td><td>'+esc(m.author)+'</td>'
+      +'<td class="k">검토자 / 승인자</td><td>'+esc(m.reviewer)+' / '+esc(m.approver)+'</td></tr>');
+
+  set('signRole', rows(D.signOff, function(s){ return '<th class="role">'+esc(s.role)+'</th>'; }));
+  set('signBody', rows(D.signOff, function(){ return '<td></td>'; }));
+  set('signName', rows(D.signOff, function(s){
+    return '<td class="c" style="height:auto;font-size:8.8pt;color:#5b6470">'+esc(s.name)+'</td>'; }));
+
+  set('tRev', rows(D.revisions, function(r){
+    return '<tr><td class="c">'+esc(r.rev)+'</td><td class="c">'+esc(r.date)+'</td>'
+         + '<td class="c">'+esc(r.author)+'</td><td>'+esc(r.desc)+'</td></tr>'; }));
+
+  /* ── 1. 식별 정보 ────────────────────────────── */
+  set('tIdent', rows(D.identification, function(r){
+    var c = r.chg ? ' class="chg"' : '';
+    return '<tr><td class="k">'+esc(r.item)+'</td><td class="mono">'+esc(r.before)+'</td>'
+         + '<td class="mono"'+c+'>'+esc(r.after)+'</td><td>'+esc(r.note)+'</td></tr>'; }));
+
+  /* ── 2. 변경 개요 ────────────────────────────── */
+  set('tChange', kv(D.change.map(function(r){ return {k:r.k, v:esc(r.v)}; })));
+  set('tChangeDet', rows(D.changeDetail, function(r,i){
+    return '<tr><td class="c">'+(i+1)+'</td><td class="mono">'+esc(r.file)+'</td>'
+         + '<td>'+esc(r.desc)+'</td><td class="c">'+esc(r.type)+'</td>'
+         + '<td class="c">'+esc(r.loc)+'</td></tr>'; }));
+
+  /* ── 3. 영향도 ───────────────────────────────── */
+  set('tImpact', rows(D.impact, function(r){
+    return '<tr><td class="k">'+esc(r.area)+'</td><td class="c"><span class="pill">'+esc(r.level)+'</span></td>'
+         + '<td>'+esc(r.desc)+'</td><td>'+esc(r.action)+'</td></tr>'; }));
+  set('tRes', rows(D.resources, function(r){
+    return '<tr><td class="k">'+esc(r.item)+'</td><td class="c mono">'+esc(r.before)+'</td>'
+         + '<td class="c mono">'+esc(r.after)+'</td><td class="c mono">'+esc(r.delta)+'</td>'
+         + '<td class="c">'+esc(r.limit)+'</td><td class="c">'+badge(r.verdict)+'</td></tr>'; }));
+  set('regScope', D.regressionScope);
+
+  /* ── 4. 계획 ─────────────────────────────────── */
+  set('tPlan', kv(D.plan.map(function(r){ return {k:r.k, v:esc(r.v)}; })));
+  set('tEnv', rows(D.environment, function(r){
+    return '<tr><td class="k">'+esc(r.cat)+'</td><td>'+esc(r.name)+'</td>'
+         + '<td class="c mono">'+esc(r.ver)+'</td><td>'+esc(r.note)+'</td></tr>'; }));
+  set('tCrit', rows(D.criteria, function(r){
+    var key = VC[r.k] ? '<span class="b '+VC[r.k]+'">'+esc(r.k)+'</span>' : '<b>'+esc(r.k)+'</b>';
+    return '<tr><td class="k" style="width:14%;text-align:center">'+key+'</td><td>'+esc(r.v)+'</td></tr>'; }));
+
+  /* ── 5~6. 결과 집계 및 상세 ──────────────────── */
+  var R = D.results;
+  var stat = {'PASS':0,'FAIL':0,'N.A.':0,'미실시':0};
+  R.forEach(function(r){ if(stat[r.verdict]!==undefined) stat[r.verdict]++; });
+  var total = R.length, done = stat['PASS']+stat['FAIL'];
+  var passRate = done ? (stat['PASS']/done*100) : 0;
+
+  set('cards',
+     '<div class="card"><div class="n">'+total+'</div><div class="l">총 검증 항목</div></div>'
+    +'<div class="card p"><div class="n">'+stat['PASS']+'</div><div class="l">PASS</div></div>'
+    +'<div class="card f"><div class="n">'+stat['FAIL']+'</div><div class="l">FAIL</div></div>'
+    +'<div class="card n"><div class="n">'+stat['N.A.']+'</div><div class="l">N.A. (제외)</div></div>'
+    +'<div class="card w"><div class="n">'+stat['미실시']+'</div><div class="l">미실시</div></div>');
+
+  function pct(n){ return (n/total*100).toFixed(1)+'%'; }
+  set('bar',
+     '<i class="p" style="width:'+pct(stat['PASS'])+'"></i>'
+    +'<i class="f" style="width:'+pct(stat['FAIL'])+'"></i>'
+    +'<i class="n" style="width:'+pct(stat['N.A.'])+'"></i>'
+    +'<i class="w" style="width:'+pct(stat['미실시'])+'"></i>');
+  set('barNote', '실시 항목 기준 Pass율 <b>'+passRate.toFixed(1)+'%</b> ('
+    +stat['PASS']+'/'+done+') · N.A. 및 미실시 항목은 제9장 참조 · FAIL 항목은 제8장 NCR로 관리');
+
+  var cats = [];
+  R.forEach(function(r){ if(cats.indexOf(r.cat)<0) cats.push(r.cat); });
+  set('tCatSum', rows(cats, function(c){
+    var g = R.filter(function(r){ return r.cat===c; });
+    var p = g.filter(function(r){return r.verdict==='PASS';}).length;
+    var f = g.filter(function(r){return r.verdict==='FAIL';}).length;
+    var n = g.filter(function(r){return r.verdict==='N.A.';}).length;
+    var w = g.filter(function(r){return r.verdict==='미실시';}).length;
+    var d = p+f;
+    return '<tr><td class="k">'+esc(c)+'</td><td class="c">'+g.length+'</td><td class="c">'+d+'</td>'
+         + '<td class="c">'+p+'</td><td class="c">'+(f?'<b style="color:#c02026">'+f+'</b>':'0')+'</td>'
+         + '<td class="c">'+n+'</td><td class="c">'+w+'</td>'
+         + '<td class="c">'+(d?(p/d*100).toFixed(0)+'%':'—')+'</td></tr>'; })
+    + '<tr><td class="k" style="background:#e6ecf3">합계</td><td class="c"><b>'+total+'</b></td>'
+    + '<td class="c"><b>'+done+'</b></td><td class="c"><b>'+stat['PASS']+'</b></td>'
+    + '<td class="c"><b>'+stat['FAIL']+'</b></td><td class="c"><b>'+stat['N.A.']+'</b></td>'
+    + '<td class="c"><b>'+stat['미실시']+'</b></td><td class="c"><b>'+passRate.toFixed(0)+'%</b></td></tr>');
+
+  set('tResult', rows(R, function(r,i){
+    return '<tr data-cat="'+esc(r.cat)+'" data-ver="'+esc(r.verdict)+'" '
+         + 'data-txt="'+esc((r.cat+' '+r.req+' '+r.tc+' '+r.cond+' '+r.exp+' '+r.act).toLowerCase())+'">'
+         + '<td class="c">'+(i+1)+'</td><td class="c">'+esc(r.cat)+'</td>'
+         + '<td class="c mono">'+esc(r.req)+'</td><td class="c mono">'+esc(r.tc)+'</td>'
+         + '<td>'+esc(r.cond)+'</td><td>'+esc(r.exp)+'</td><td>'+esc(r.act)+'</td>'
+         + '<td class="c">'+badge(r.verdict)+'</td><td class="c">'+esc(r.ev)+'</td>'
+         + '<td class="c">'+esc(r.date)+'<br>'+esc(r.by)+'</td></tr>'; }));
+
+  /* ── 7. 추적성 ───────────────────────────────── */
+  set('tTrace', rows(D.requirements, function(q){
+    var g = R.filter(function(r){ return r.req===q.id; });
+    var v = g.some(function(r){return r.verdict==='FAIL';}) ? 'FAIL'
+          : (g.length && g.every(function(r){return r.verdict==='PASS';})) ? 'PASS'
+          : (g.length ? '미실시' : 'N.A.');
+    /* 재시험으로 최종 PASS 된 요구사항은 최종 상태로 표기 */
+    if (v==='FAIL' && g.some(function(r){ return /R$/.test(r.tc) && r.verdict==='PASS'; })) v='PASS';
+    return '<tr><td class="c mono">'+esc(q.id)+'</td><td>'+esc(q.desc)+'</td>'
+         + '<td class="c mono">'+esc(g.map(function(r){return r.tc;}).join(', ')||'—')+'</td>'
+         + '<td class="c">'+(g.length?'O ('+g.length+')':'<b style="color:#c02026">미커버</b>')+'</td>'
+         + '<td class="c">'+badge(v)+'</td></tr>'; }));
+
+  /* ── 8~9. NCR / Deviation ────────────────────── */
+  set('tNcr', rows(D.ncr, function(r){
+    return '<tr><td class="c mono">'+esc(r.id)+'</td><td class="c mono">'+esc(r.tc)+'</td>'
+         + '<td>'+esc(r.phenom)+'<br><span style="color:#5b6470">재현: '+esc(r.repro)+'</span></td>'
+         + '<td class="c"><span class="b sev-'+esc(r.sev)+'">'+esc(r.sev)+'</span></td>'
+         + '<td>'+esc(r.cause)+'</td><td>'+esc(r.action)+'</td>'
+         + '<td class="c mono">'+esc(r.fixVer)+'</td>'
+         + '<td class="c">'+(VC[r.retest]?badge(r.retest):esc(r.retest))+'</td>'
+         + '<td class="c">'+esc(r.status)+'<br><span style="color:#5b6470;font-size:8pt">'+esc(r.owner)+'</span></td></tr>'; }));
+
+  set('tDev', rows(D.deviations, function(r){
+    return '<tr><td class="c mono">'+esc(r.tc)+'</td><td>'+esc(r.item)+'</td>'
+         + '<td>'+esc(r.reason)+'</td><td>'+esc(r.plan)+'</td><td class="c">'+esc(r.approver)+'</td></tr>'; }));
+
+  /* ── 10~12. 결론 / 승인 / 부록 ───────────────── */
+  var C = D.conclusion;
+  set('vFinal', esc(C.final));
+  set('vSummary', esc(C.summary));
+  set('tConclusion', kv(C.rows.map(function(r){ return {k:r.k, v:esc(r.v)}; })));
+  set('vRisk', C.risk);
+
+  set('tAppr', rows(D.approvals, function(r){
+    return '<tr><td class="k" style="text-align:center">'+esc(r.role)+'</td><td class="c">'+esc(r.dept)+'</td>'
+         + '<td class="c">'+esc(r.name)+'</td><td class="c">'+esc(r.date)+'</td><td></td></tr>'; }));
+
+  set('tAppx', rows(D.appendix, function(r,i){
+    return '<tr><td class="c">'+String.fromCharCode(65+i)+'</td><td>'+esc(r.name)+'</td>'
+         + '<td class="mono">'+esc(r.file)+'</td><td>'+esc(r.note)+'</td></tr>'; }));
+
+  set('tAbbr', rows(D.abbreviations, function(r){
+    return '<tr><td class="k mono" style="width:14%;text-align:center">'+esc(r.k)+'</td>'
+         + '<td>'+esc(r.v)+'</td></tr>'; }));
+
+  set('fLeft', esc(m.docNo+' · Rev '+m.rev+' · '+m.classification));
+  set('fRight', esc(m.title+' | 발행 '+m.issueDate));
+
+  /* ── 화면 전용 필터 ──────────────────────────── */
+  var fCat=document.getElementById('fCat'), fVer=document.getElementById('fVer'),
+      fTxt=document.getElementById('fTxt'), fCount=document.getElementById('fCount');
+  cats.forEach(function(c){ fCat.insertAdjacentHTML('beforeend','<option>'+esc(c)+'</option>'); });
+  ['PASS','FAIL','N.A.','미실시'].forEach(function(v){
+    fVer.insertAdjacentHTML('beforeend','<option>'+v+'</option>'); });
+
+  function applyFilter(){
+    var c=fCat.value, v=fVer.value, t=fTxt.value.trim().toLowerCase(), shown=0;
+    Array.prototype.forEach.call(document.querySelectorAll('#tResult tr'), function(tr){
+      var ok = (!c || tr.dataset.cat===c) && (!v || tr.dataset.ver===v)
+            && (!t || tr.dataset.txt.indexOf(t)>=0);
+      tr.classList.toggle('hide', !ok); if(ok) shown++;
+    });
+    fCount.textContent = shown+' / '+R.length+' 항목 표시';
+  }
+  [fCat,fVer].forEach(function(e){ e.addEventListener('change', applyFilter); });
+  fTxt.addEventListener('input', applyFilter);
+  applyFilter();
+})();
+</script>
+</body>
+</html>

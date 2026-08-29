@@ -393,8 +393,10 @@ class DrawingLayer {
 
   _resize() {
     const dpr = window.devicePixelRatio || 1;
-    const w = this.container.clientWidth;
-    const h = this.container.clientHeight;
+    // clientWidth는 반올림값이라 소수점 픽셀 패널에서 1px 넘칠 수 있어 내림 처리
+    const rect = this.container.getBoundingClientRect();
+    const w = Math.floor(rect.width);
+    const h = Math.floor(rect.height);
     this.canvas.width = Math.max(1, Math.round(w * dpr));
     this.canvas.height = Math.max(1, Math.round(h * dpr));
     this.canvas.style.width = `${w}px`;

@@ -575,7 +575,12 @@ class ChartPanel {
       [this.els.paneRsi, this.rsiChart],
       [this.els.paneMacd, this.macdChart],
     ]) {
-      const ro = new ResizeObserver(() => chartObj.resize(paneEl.clientWidth, paneEl.clientHeight));
+      // 분할 비율이 소수라 패널 크기가 소수점 픽셀일 수 있다.
+      // clientWidth(반올림)를 쓰면 캔버스가 패널보다 1px 커져 넘칠 수 있으므로 내림 처리.
+      const ro = new ResizeObserver(() => {
+        const rect = paneEl.getBoundingClientRect();
+        chartObj.resize(Math.floor(rect.width), Math.floor(rect.height));
+      });
       ro.observe(paneEl);
       this.resizeObservers.push(ro);
     }

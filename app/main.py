@@ -15,6 +15,7 @@ from .config import load_config
 from .db import Database
 from .paths import BUNDLE_DIR
 from .resample import parse_tf, pick_source, resample, source_fetch_limit
+from .scanner import Scanner, market_matches
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
@@ -28,10 +29,14 @@ async def lifespan(app: FastAPI):
     await db.init()
     collector = Collector(cfg, db)
     await collector.start()
+    scanner = Scanner(cfg, db)
+    await scanner.start()
     app.state.cfg = cfg
     app.state.db = db
     app.state.collector = collector
+    app.state.scanner = scanner
     yield
+    await scanner.stop()
     await collector.stop()
     await db.close()
 
@@ -111,22 +116,6 @@ async def candles(
     return {"exchange": exchange, "symbol": symbol, "timeframe": timeframe, "candles": rows}
 
 
-def _market_matches(ex_cfg, market: dict) -> bool:
-    """config의 quote/market_type 필터에 맞는 마켓인지 (활성 마켓만)."""
-    if market.get("active") is False:
-        return False
-    if ex_cfg.quote and market.get("quote") != ex_cfg.quote:
-        return False
-    if ex_cfg.market_type == "spot" and not market.get("spot"):
-        return False
-    if ex_cfg.market_type == "swap":
-        if not market.get("swap"):
-            return False
-        if market.get("linear") is False:  # USDT 무기한 = linear만
-            return False
-    return True
-
-
 @app.get("/api/markets")
 async def markets(exchange: str):
     """거래 가능한 전체 심볼 목록 (config의 quote/market_type 필터 적용).
@@ -139,7 +128,7 @@ async def markets(exchange: str):
         raise HTTPException(404, f"활성화되지 않은 거래소: {exchange}")
     try:
         await ex.load_markets()
-        symbols = [s for s, m in ex.markets.items() if _market_matches(ex_cfg, m)]
+        symbols = [s for s, m in ex.markets.items() if market_matches(ex_cfg, m)]
         source = "exchange"
     except Exception as e:  # noqa: BLE001
         seen = set(await app.state.db.distinct_symbols(exchange)) | set(ex_cfg.symbols)
@@ -147,6 +136,33 @@ async def markets(exchange: str):
         source = "offline"
         logging.getLogger("api").warning("[%s] 마켓 조회 실패, 저장분으로 대체: %s", exchange, e)
     return {"exchange": exchange, "symbols": sorted(symbols), "source": source}
+
+
+# ----- 엔벨로프 스캐너 (전 마켓 감시 → 텔레그램 알림) -----
+
+
+@app.get("/api/scanner")
+async def scanner_info():
+    sc: Scanner = app.state.scanner
+    return {"settings": sc.settings, "status": sc.status, "alerts": list(sc.recent)[:50]}
+
+
+@app.put("/api/scanner/settings")
+async def scanner_settings(data: dict = Body(...)):
+    sc: Scanner = app.state.scanner
+    try:
+        await sc.apply_settings(data)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "settings": sc.settings}
+
+
+@app.post("/api/scanner/test")
+async def scanner_test():
+    err = await app.state.scanner.send_test()
+    if err:
+        raise HTTPException(502, f"텔레그램 전송 실패: {err}")
+    return {"ok": True}
 
 
 # ----- 차트 레이아웃 프리셋 (트레이딩뷰의 '차트 레이아웃 저장'에 해당) -----

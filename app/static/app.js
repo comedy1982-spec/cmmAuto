@@ -1472,6 +1472,7 @@ layBtn.addEventListener("click", (e) => {
   const open = layPanel.hidden;
   closeAllIndicatorPopovers();
   closeLayoutPopover();
+  closeScannerPopover();
   if (open) {
     layPanel.hidden = false;
     layBtn.classList.add("open");
@@ -1481,6 +1482,259 @@ layBtn.addEventListener("click", (e) => {
 });
 layPanel.addEventListener("click", (e) => e.stopPropagation());
 document.addEventListener("click", () => closeLayoutPopover());
+
+/* ---------- 엔벨로프 스캐너 (전 마켓 감시 → 텔레그램 알림) ---------- */
+
+const scanBtn = document.getElementById("scanner-btn");
+const scanPanel = document.getElementById("scanner-panel");
+const SCAN_TFS = ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"];
+const SCAN_SIDE = { upper: "상단", lower: "하단" };
+let scanRefreshTimer = null;
+
+function closeScannerPopover() {
+  scanPanel.hidden = true;
+  scanBtn.classList.remove("open");
+  scanBtn.setAttribute("aria-expanded", "false");
+  if (scanRefreshTimer) {
+    clearInterval(scanRefreshTimer);
+    scanRefreshTimer = null;
+  }
+}
+
+function scanMessage(text, isError = false) {
+  const msg = scanPanel.querySelector(".scan-msg");
+  if (msg) {
+    msg.textContent = text;
+    msg.className = `lay-msg scan-msg${isError ? " err" : ""}`;
+  }
+}
+
+function fmtScanPrice(v) {
+  if (v >= 1000) return Math.round(v).toLocaleString("ko-KR");
+  if (v >= 1) return v.toLocaleString("ko-KR", { maximumFractionDigits: 2 });
+  return v.toLocaleString("ko-KR", { maximumFractionDigits: 6 });
+}
+
+/** 상태 줄 + 최근 알림 목록만 갱신 (입력 폼은 건드리지 않는다) */
+function renderScannerStatus(info) {
+  scanBtn.classList.toggle("scan-on", !!info.settings.enabled);
+
+  const stEl = scanPanel.querySelector(".scan-status");
+  if (!stEl) return;
+  const st = info.status;
+  const lines = [];
+  if (!info.settings.enabled) {
+    lines.push("상태: 꺼짐");
+  } else if (!st.last_sweep_finished) {
+    lines.push("상태: 첫 스캔 진행 중…");
+  } else {
+    const ago = Math.max(0, Math.round(Date.now() / 1000 - st.last_sweep_finished));
+    lines.push(`상태: 켜짐 · ${st.symbol_count}개 코인 · 스캔 ${st.sweep_seconds}s 소요 (${ago}s 전 완료)`);
+    lines.push(`누적 알림 ${st.alerts_sent}건`);
+  }
+  if (st.last_error) lines.push(`⚠ 조회 오류: ${st.last_error}`);
+  if (st.telegram_error) lines.push(`⚠ 텔레그램 오류: ${st.telegram_error}`);
+  stEl.textContent = lines.join("\n");
+
+  const listEl = scanPanel.querySelector(".scan-alerts");
+  if (!listEl) return;
+  listEl.innerHTML = "";
+  const timeFmt = new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+  for (const a of (info.alerts ?? []).slice(0, 20)) {
+    const row = document.createElement("div");
+    row.className = "scan-alert";
+    const t = document.createElement("span");
+    t.className = "t";
+    t.textContent = timeFmt.format(new Date(a.time * 1000));
+    const sym = document.createElement("span");
+    sym.className = "s";
+    sym.textContent = a.symbol;
+    const side = document.createElement("span");
+    side.className = `side-${a.side}`;
+    side.textContent = `${SCAN_SIDE[a.side] ?? a.side} ±${a.percent}%`;
+    const price = document.createElement("span");
+    price.className = "p";
+    price.textContent = fmtScanPrice(a.price);
+    row.append(t, sym, side, price);
+    listEl.appendChild(row);
+  }
+  if (!info.alerts?.length) {
+    listEl.innerHTML = `<div class="lay-empty">아직 알림이 없습니다</div>`;
+  }
+}
+
+async function buildScannerPopover() {
+  scanPanel.innerHTML = "";
+  let info;
+  try {
+    info = await api("/api/scanner");
+  } catch (e) {
+    scanPanel.innerHTML = `<div class="lay-empty">스캐너 정보를 불러오지 못했습니다: ${e.message}</div>`;
+    return;
+  }
+  const s = { ...info.settings };
+
+  const form = document.createElement("div");
+  form.className = "ind-section";
+  form.innerHTML = `<div class="ind-title">엔벨로프 스캐너 — 거래소 전 코인 감시</div>`;
+
+  const enableRow = document.createElement("div");
+  enableRow.className = "ind-row";
+  enableRow.appendChild(checkboxLabel("스캐너 켜기 (밴드 터치 시 텔레그램 알림)", s.enabled, (v) => { s.enabled = v; }));
+  form.appendChild(enableRow);
+
+  const row1 = document.createElement("div");
+  row1.className = "ind-row";
+  const exSel = document.createElement("select");
+  for (const exId of Object.keys(meta.exchanges)) {
+    const o = document.createElement("option");
+    o.value = exId;
+    o.textContent = exId;
+    exSel.appendChild(o);
+  }
+  exSel.value = s.exchange;
+  exSel.addEventListener("change", () => { s.exchange = exSel.value; });
+  const tfSel = document.createElement("select");
+  for (const tf of SCAN_TFS) {
+    const o = document.createElement("option");
+    o.value = tf;
+    o.textContent = tf;
+    tfSel.appendChild(o);
+  }
+  tfSel.value = SCAN_TFS.includes(s.timeframe) ? s.timeframe : "3m";
+  tfSel.addEventListener("change", () => { s.timeframe = tfSel.value; });
+  const tfSub = document.createElement("span");
+  tfSub.className = "sub";
+  tfSub.textContent = "봉";
+  row1.append(exSel, tfSel, tfSub);
+  form.appendChild(row1);
+
+  const row2 = document.createElement("div");
+  row2.className = "ind-row";
+  row2.appendChild(numberInput(s.period, 2, 400, 1, (v) => { s.period = v; }));
+  const sub1 = document.createElement("span"); sub1.className = "sub"; sub1.textContent = "기간";
+  row2.appendChild(sub1);
+  row2.appendChild(numberInput(s.percent, 0.1, 50, 0.1, (v) => { s.percent = v; }));
+  const sub2 = document.createElement("span"); sub2.className = "sub"; sub2.textContent = "%";
+  row2.appendChild(sub2);
+  row2.appendChild(numberInput(s.sweep_interval_seconds, 15, 3600, 5, (v) => { s.sweep_interval_seconds = v; }));
+  const sub3 = document.createElement("span"); sub3.className = "sub"; sub3.textContent = "초 주기";
+  row2.appendChild(sub3);
+  form.appendChild(row2);
+
+  const tokenField = document.createElement("div");
+  tokenField.className = "scan-field";
+  tokenField.innerHTML = `<span class="sub">텔레그램 봇 토큰 (@BotFather에서 발급)</span>`;
+  const tokenInput = document.createElement("input");
+  tokenInput.type = "password";
+  tokenInput.autocomplete = "off";
+  tokenInput.placeholder = "123456789:AAF...";
+  tokenInput.value = s.telegram_token;
+  tokenField.appendChild(tokenInput);
+  form.appendChild(tokenField);
+
+  const chatField = document.createElement("div");
+  chatField.className = "scan-field";
+  chatField.innerHTML = `<span class="sub">챗 ID (@userinfobot에게 /start 하면 확인)</span>`;
+  const chatInput = document.createElement("input");
+  chatInput.type = "text";
+  chatInput.autocomplete = "off";
+  chatInput.placeholder = "123456789";
+  chatInput.value = s.telegram_chat_id;
+  chatField.appendChild(chatInput);
+  form.appendChild(chatField);
+
+  const doSave = async () => {
+    const body = {
+      ...s,
+      telegram_token: tokenInput.value.trim(),
+      telegram_chat_id: chatInput.value.trim(),
+    };
+    const res = await fetch("/api/scanner/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => null);
+      throw new Error(d?.detail ?? `HTTP ${res.status}`);
+    }
+  };
+
+  const actions = document.createElement("div");
+  actions.className = "scan-actions";
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "lay-save-btn";
+  saveBtn.textContent = "저장";
+  saveBtn.addEventListener("click", async () => {
+    try {
+      await doSave();
+      scanMessage(s.enabled ? "저장됨 — 곧 스캔이 시작됩니다" : "저장됨 (스캐너 꺼짐)");
+      renderScannerStatus(await api("/api/scanner"));
+    } catch (e) {
+      scanMessage(`저장 실패: ${e.message}`, true);
+    }
+  });
+  const testBtn = document.createElement("button");
+  testBtn.type = "button";
+  testBtn.className = "scan-test-btn";
+  testBtn.textContent = "테스트 전송";
+  testBtn.addEventListener("click", async () => {
+    try {
+      await doSave(); // 입력 중인 토큰으로 바로 테스트되도록 먼저 저장
+      scanMessage("전송 중…");
+      const res = await fetch("/api/scanner/test", { method: "POST" });
+      if (!res.ok) {
+        const d = await res.json().catch(() => null);
+        throw new Error(d?.detail ?? `HTTP ${res.status}`);
+      }
+      scanMessage("✅ 텔레그램으로 테스트 메시지를 보냈습니다");
+    } catch (e) {
+      scanMessage(`${e.message}`, true);
+    }
+  });
+  actions.append(saveBtn, testBtn);
+  form.appendChild(actions);
+
+  const msg = document.createElement("div");
+  msg.className = "lay-msg scan-msg";
+  form.appendChild(msg);
+  scanPanel.appendChild(form);
+
+  const statusSection = document.createElement("div");
+  statusSection.className = "ind-section";
+  statusSection.innerHTML = `<div class="ind-title">최근 알림</div><div class="scan-status"></div><div class="scan-alerts"></div>`;
+  scanPanel.appendChild(statusSection);
+
+  renderScannerStatus(info);
+  scanRefreshTimer = setInterval(async () => {
+    try {
+      renderScannerStatus(await api("/api/scanner"));
+    } catch { /* 다음 주기에 재시도 */ }
+  }, 5000);
+}
+
+scanBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const open = scanPanel.hidden;
+  closeAllIndicatorPopovers();
+  closeLayoutPopover();
+  closeScannerPopover();
+  if (open) {
+    scanPanel.hidden = false;
+    scanBtn.classList.add("open");
+    scanBtn.setAttribute("aria-expanded", "true");
+    buildScannerPopover();
+  }
+});
+scanPanel.addEventListener("click", (e) => e.stopPropagation());
+document.addEventListener("click", () => closeScannerPopover());
+
+// 시작 시 한 번: 스캐너가 켜져 있으면 버튼에 표시
+api("/api/scanner").then((info) => {
+  scanBtn.classList.toggle("scan-on", !!info.settings.enabled);
+}).catch(() => {});
 
 /* ---------- 수집기 상태 표시 ---------- */
 

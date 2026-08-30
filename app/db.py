@@ -24,6 +24,12 @@ CREATE TABLE IF NOT EXISTS layouts (
     data       TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 """
 
 
@@ -113,6 +119,20 @@ class Database:
         ) as cur:
             rows = await cur.fetchall()
         return [r[0] for r in rows]
+
+    # ----- 키-값 설정 (스캐너 등) -----
+
+    async def get_setting(self, key: str) -> str | None:
+        async with self.conn.execute("SELECT value FROM settings WHERE key=?", (key,)) as cur:
+            row = await cur.fetchone()
+        return row[0] if row else None
+
+    async def save_setting(self, key: str, value: str) -> None:
+        await self.conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, strftime('%s','now'))",
+            (key, value),
+        )
+        await self.conn.commit()
 
     # ----- 차트 레이아웃 프리셋 -----
 

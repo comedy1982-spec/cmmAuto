@@ -1,0 +1,27 @@
+{
+  "database": "data/candles.db",
+  "poll_interval_seconds": 5,
+  "live_refresh_seconds": 10,
+  "backfill_candles": 1500,
+  "dynamic_ttl_seconds": 900,
+  "timezone_offset_hours": 9,
+  "timeframes": ["1m", "5m", "15m", "1h", "4h", "1d"],
+  "exchanges": {
+    "upbit": {
+      "quote": "KRW",
+      "market_type": "spot",
+      "symbols": ["BTC/KRW", "ETH/KRW", "XRP/KRW"]
+    },
+    "binance": {
+      "ccxt_id": "binanceusdm",
+      "quote": "USDT",
+      "market_type": "swap",
+      "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT"]
+    },
+    "bybit": {
+      "quote": "USDT",
+      "market_type": "swap",
+      "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+    }
+  }
+}

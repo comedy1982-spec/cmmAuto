@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>cmmAuto Chart Viewer</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="toolbar">
+    <div class="brand">cmmAuto</div>
+
+    <div class="field">
+      <span class="field-label">분할</span>
+      <div id="layout-group" class="segmented" role="group" aria-label="화면 분할">
+        <button type="button" data-layout="1" title="1분할">□</button>
+        <button type="button" data-layout="2" title="2분할 (좌우)">◫</button>
+        <button type="button" data-layout="3" title="3분할 (좌 1 + 우 2)">◧</button>
+        <button type="button" data-layout="4" title="4분할 (2×2)">▦</button>
+      </div>
+    </div>
+
+    <div class="field indicator-field">
+      <button id="layoutmgr-btn" type="button" class="indicator-btn" aria-expanded="false">레이아웃 ▾</button>
+      <div id="layoutmgr-panel" class="indicator-panel" hidden></div>
+    </div>
+
+    <div class="field indicator-field">
+      <button id="scanner-btn" type="button" class="indicator-btn" aria-expanded="false">🔔 알림 ▾</button>
+      <div id="scanner-panel" class="indicator-panel scanner-panel" hidden></div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="status" title="수집기 상태">
+      <span id="status-dot" class="dot dot-unknown"></span>
+      <span id="status-text">연결 중…</span>
+    </div>
+  </header>
+
+  <main id="grid" class="grid" data-layout="1"></main>
+
+  <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+  <script src="/static/indicators.js"></script>
+  <script src="/static/drawings.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

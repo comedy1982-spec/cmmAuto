@@ -260,7 +260,12 @@ const DEFAULT_SETTINGS = {
   volume: { on: true },
   rsi: { on: false, period: 14 },
   macd: { on: false, fast: 12, slow: 26, signal: 9 },
+  trendline: { on: false, pivot: 5, lookback: 150, markers: true },
 };
+
+const TL_RES_COLOR = "#f23645";
+const TL_SUP_COLOR = "#22ab94";
+const TL_MARKER_BARS = 300; // 과거 돌파 표시는 최근 N봉까지만 계산
 
 /** 저장된 지표 설정을 기본값 위에 얹어 완전한 설정 객체를 만든다 */
 function mergeIndicatorSettings(saved) {
@@ -273,6 +278,7 @@ function mergeIndicatorSettings(saved) {
     Object.assign(base.volume, saved.volume);
     Object.assign(base.rsi, saved.rsi);
     Object.assign(base.macd, saved.macd);
+    Object.assign(base.trendline, saved.trendline);
   } catch { /* 손상된 저장값은 기본값으로 */ }
   return base;
 }
@@ -567,7 +573,10 @@ class ChartPanel {
       bbUpper: null, bbMiddle: null, bbLower: null,
       rsi: null,
       macdLine: null, macdSignal: null, macdHist: null,
+      tlRes: null, tlSup: null,
     };
+    // 자동 추세선 과거 돌파 캐시: 마감 봉 구간이 같으면 마지막 봉만 다시 계산
+    this.tlCache = { key: null, breaks: [] };
 
     this.resizeObservers = [];
     for (const [paneEl, chartObj] of [
@@ -870,6 +879,15 @@ class ChartPanel {
       this.removeInd(this.chart, "bbLower");
     }
 
+    if (settings.trendline.on) {
+      if (!ind.tlRes) ind.tlRes = this.addLine(this.chart, TL_RES_COLOR, { lineWidth: 2, lastValueVisible: true });
+      if (!ind.tlSup) ind.tlSup = this.addLine(this.chart, TL_SUP_COLOR, { lineWidth: 2, lastValueVisible: true });
+    } else {
+      this.removeInd(this.chart, "tlRes");
+      this.removeInd(this.chart, "tlSup");
+      this.candleSeries.setMarkers([]);
+    }
+
     this.volumeSeries.applyOptions({ visible: settings.volume.on });
 
     this.els.paneRsi.hidden = !settings.rsi.on;
@@ -953,6 +971,45 @@ class ChartPanel {
       ind.macdLine.setData(withWarmupWhitespace(bars, m.macd));
       ind.macdSignal.setData(withWarmupWhitespace(bars, m.signal));
     }
+    if (ind.tlRes) this.recomputeTrendlines();
+  }
+
+  /** 자동 추세선: 현재 저항·지지선을 그리고, 과거 돌파 지점을 캔들 마커로 표시 */
+  recomputeTrendlines() {
+    const bars = this.bars;
+    const { pivot, lookback, markers } = this.settings.trendline;
+    const end = bars.length - 1;
+    const toLine = (t) => (t ? [
+      { time: bars[t.i1].time, value: t.p1 },
+      { time: bars[end].time, value: t.value },
+    ] : []);
+
+    if (end < pivot * 2 + 3) {
+      this.ind.tlRes.setData([]);
+      this.ind.tlSup.setData([]);
+      this.candleSeries.setMarkers([]);
+      return;
+    }
+    this.ind.tlRes.setData(toLine(Indicators.findTrendline(bars, end, pivot, lookback, "res")));
+    this.ind.tlSup.setData(toLine(Indicators.findTrendline(bars, end, pivot, lookback, "sup")));
+
+    if (!markers) {
+      this.candleSeries.setMarkers([]);
+      return;
+    }
+    // 마감 봉들의 돌파 여부는 바뀌지 않으므로 캐시하고, 진행 중인 마지막 봉만 매번 계산
+    const key = `${bars[0].time}|${bars[end - 1].time}|${end}|${pivot}|${lookback}`;
+    if (this.tlCache.key !== key) {
+      const breaks = [];
+      for (let i = Math.max(pivot * 2 + 3, end - TL_MARKER_BARS); i < end; i++) {
+        breaks.push(...Indicators.trendlineBreakAt(bars, i, pivot, lookback));
+      }
+      this.tlCache = { key, breaks };
+    }
+    const all = [...this.tlCache.breaks, ...Indicators.trendlineBreakAt(bars, end, pivot, lookback)];
+    this.candleSeries.setMarkers(all.map((b) => (b.side === "up"
+      ? { time: bars[b.index].time, position: "belowBar", color: TL_SUP_COLOR, shape: "arrowUp", text: "돌파" }
+      : { time: bars[b.index].time, position: "aboveBar", color: TL_RES_COLOR, shape: "arrowDown", text: "이탈" })));
   }
 
   applySettingsChange() {
@@ -1058,6 +1115,25 @@ class ChartPanel {
     macdRow.appendChild(macdSub);
     macdSection.appendChild(macdRow);
     panel.appendChild(macdSection);
+
+    const tl = settings.trendline;
+    const tlSection = document.createElement("div");
+    tlSection.className = "ind-section";
+    const tlRow = document.createElement("div");
+    tlRow.className = "ind-row";
+    tlRow.appendChild(checkboxLabel("자동 추세선", tl.on, (v) => { tl.on = v; apply(); }));
+    tlRow.appendChild(numberInput(tl.pivot, 2, 20, 1, (v) => { tl.pivot = v; apply(); }));
+    const tlSub1 = document.createElement("span"); tlSub1.className = "sub"; tlSub1.textContent = "피벗";
+    tlRow.appendChild(tlSub1);
+    tlRow.appendChild(numberInput(tl.lookback, 30, 500, 10, (v) => { tl.lookback = v; apply(); }));
+    const tlSub2 = document.createElement("span"); tlSub2.className = "sub"; tlSub2.textContent = "탐색 봉수";
+    tlRow.appendChild(tlSub2);
+    tlSection.appendChild(tlRow);
+    const tlRow2 = document.createElement("div");
+    tlRow2.className = "ind-row";
+    tlRow2.appendChild(checkboxLabel("과거 돌파·이탈 지점 표시", tl.markers, (v) => { tl.markers = v; apply(); }));
+    tlSection.appendChild(tlRow2);
+    panel.appendChild(tlSection);
 
     const reset = document.createElement("button");
     reset.type = "button";
@@ -1487,8 +1563,7 @@ document.addEventListener("click", () => closeLayoutPopover());
 
 const scanBtn = document.getElementById("scanner-btn");
 const scanPanel = document.getElementById("scanner-panel");
-const SCAN_TFS = ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"];
-const SCAN_SIDE = { upper: "상단", lower: "하단" };
+const SCAN_TFS = ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"];
 let scanRefreshTimer = null;
 
 function closeScannerPopover() {
@@ -1548,10 +1623,13 @@ function renderScannerStatus(info) {
     t.textContent = timeFmt.format(new Date(a.time * 1000));
     const sym = document.createElement("span");
     sym.className = "s";
-    sym.textContent = a.symbol;
+    sym.textContent = `${a.symbol} · ${a.timeframe}`;
     const side = document.createElement("span");
     side.className = `side-${a.side}`;
-    side.textContent = `${SCAN_SIDE[a.side] ?? a.side} ±${a.percent}%`;
+    side.textContent = a.strategy === "trendline"
+      ? (a.side === "up" ? "추세선 돌파" : "추세선 이탈")
+      : (a.side === "up" ? "Env 상단" : "Env 하단");
+    side.title = [a.label, a.detail].filter(Boolean).join(" · ");
     const price = document.createElement("span");
     price.className = "p";
     price.textContent = fmtScanPrice(a.price);
@@ -1572,15 +1650,21 @@ async function buildScannerPopover() {
     scanPanel.innerHTML = `<div class="lay-empty">스캐너 정보를 불러오지 못했습니다: ${e.message}</div>`;
     return;
   }
-  const s = { ...info.settings };
+  const s = structuredClone(info.settings);
+  const sub = (text) => {
+    const el = document.createElement("span");
+    el.className = "sub";
+    el.textContent = text;
+    return el;
+  };
 
   const form = document.createElement("div");
   form.className = "ind-section";
-  form.innerHTML = `<div class="ind-title">엔벨로프 스캐너 — 거래소 전 코인 감시</div>`;
+  form.innerHTML = `<div class="ind-title">전략 스캐너 — 거래소 전 코인 감시 → 텔레그램</div>`;
 
   const enableRow = document.createElement("div");
   enableRow.className = "ind-row";
-  enableRow.appendChild(checkboxLabel("스캐너 켜기 (밴드 터치 시 텔레그램 알림)", s.enabled, (v) => { s.enabled = v; }));
+  enableRow.appendChild(checkboxLabel("스캐너 켜기", s.enabled, (v) => { s.enabled = v; }));
   form.appendChild(enableRow);
 
   const row1 = document.createElement("div");
@@ -1594,6 +1678,21 @@ async function buildScannerPopover() {
   }
   exSel.value = s.exchange;
   exSel.addEventListener("change", () => { s.exchange = exSel.value; });
+  row1.append(exSel, sub("거래소 ·"));
+  row1.appendChild(numberInput(s.sweep_interval_seconds, 10, 3600, 5, (v) => { s.sweep_interval_seconds = v; }));
+  row1.appendChild(sub("초마다 스캔"));
+  form.appendChild(row1);
+
+  // 엔벨로프
+  const env = s.envelope;
+  const envBox = document.createElement("div");
+  envBox.className = "scan-strategy";
+  const envHead = document.createElement("div");
+  envHead.className = "ind-row";
+  envHead.appendChild(checkboxLabel("엔벨로프 밴드 터치", env.on, (v) => { env.on = v; }));
+  envBox.appendChild(envHead);
+  const envRow = document.createElement("div");
+  envRow.className = "ind-row";
   const tfSel = document.createElement("select");
   for (const tf of SCAN_TFS) {
     const o = document.createElement("option");
@@ -1601,26 +1700,46 @@ async function buildScannerPopover() {
     o.textContent = tf;
     tfSel.appendChild(o);
   }
-  tfSel.value = SCAN_TFS.includes(s.timeframe) ? s.timeframe : "3m";
-  tfSel.addEventListener("change", () => { s.timeframe = tfSel.value; });
-  const tfSub = document.createElement("span");
-  tfSub.className = "sub";
-  tfSub.textContent = "봉";
-  row1.append(exSel, tfSel, tfSub);
-  form.appendChild(row1);
+  tfSel.value = SCAN_TFS.includes(env.timeframe) ? env.timeframe : "3m";
+  tfSel.addEventListener("change", () => { env.timeframe = tfSel.value; });
+  envRow.append(tfSel, sub("봉"));
+  envRow.appendChild(numberInput(env.period, 2, 195, 1, (v) => { env.period = v; }));
+  envRow.appendChild(sub("기간"));
+  envRow.appendChild(numberInput(env.percent, 0.1, 50, 0.1, (v) => { env.percent = v; }));
+  envRow.appendChild(sub("%"));
+  envBox.appendChild(envRow);
+  form.appendChild(envBox);
 
-  const row2 = document.createElement("div");
-  row2.className = "ind-row";
-  row2.appendChild(numberInput(s.period, 2, 400, 1, (v) => { s.period = v; }));
-  const sub1 = document.createElement("span"); sub1.className = "sub"; sub1.textContent = "기간";
-  row2.appendChild(sub1);
-  row2.appendChild(numberInput(s.percent, 0.1, 50, 0.1, (v) => { s.percent = v; }));
-  const sub2 = document.createElement("span"); sub2.className = "sub"; sub2.textContent = "%";
-  row2.appendChild(sub2);
-  row2.appendChild(numberInput(s.sweep_interval_seconds, 15, 3600, 5, (v) => { s.sweep_interval_seconds = v; }));
-  const sub3 = document.createElement("span"); sub3.className = "sub"; sub3.textContent = "초 주기";
-  row2.appendChild(sub3);
-  form.appendChild(row2);
+  // 자동 추세선 돌파
+  const tl = s.trendline;
+  const tlBox = document.createElement("div");
+  tlBox.className = "scan-strategy";
+  const tlHead = document.createElement("div");
+  tlHead.className = "ind-row";
+  tlHead.appendChild(checkboxLabel("자동 추세선 돌파·이탈", tl.on, (v) => { tl.on = v; }));
+  tlBox.appendChild(tlHead);
+  const tfChecks = document.createElement("div");
+  tfChecks.className = "ind-row scan-tf-checks";
+  for (const tf of SCAN_TFS) {
+    tfChecks.appendChild(checkboxLabel(tf, tl.timeframes.includes(tf), (v) => {
+      tl.timeframes = v
+        ? SCAN_TFS.filter((x) => x === tf || tl.timeframes.includes(x))
+        : tl.timeframes.filter((x) => x !== tf);
+    }));
+  }
+  tlBox.appendChild(tfChecks);
+  const tlRow = document.createElement("div");
+  tlRow.className = "ind-row";
+  tlRow.appendChild(numberInput(tl.pivot, 2, 10, 1, (v) => { tl.pivot = v; }));
+  tlRow.appendChild(sub("피벗"));
+  tlRow.appendChild(numberInput(tl.lookback, 30, 180, 10, (v) => { tl.lookback = v; }));
+  tlRow.appendChild(sub("탐색 봉수"));
+  tlBox.appendChild(tlRow);
+  const tlHint = document.createElement("div");
+  tlHint.className = "scan-hint";
+  tlHint.textContent = "차트 지표의 '자동 추세선'을 같은 피벗·봉수로 켜면 스캐너가 보는 선과 똑같이 그려집니다";
+  tlBox.appendChild(tlHint);
+  form.appendChild(tlBox);
 
   const tokenField = document.createElement("div");
   tokenField.className = "scan-field";

@@ -314,7 +314,16 @@ select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* ---------- 엔벨로프 스캐너 팝오버 ---------- */
 
-.scanner-panel { width: 330px; }
+.scanner-panel { width: 360px; max-height: 80vh; }
+.scan-strategy {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px 6px;
+  margin: 6px 0;
+}
+.scan-tf-checks { gap: 4px 10px; }
+.scan-tf-checks label { font-size: 12px; }
+.scan-hint { color: var(--text-muted); font-size: 11px; line-height: 1.4; padding-top: 2px; }
 .indicator-btn.scan-on { color: var(--accent); border-color: var(--accent); }
 .scan-field { display: flex; flex-direction: column; gap: 3px; padding: 4px 0; }
 .scan-field .sub { color: var(--text-muted); font-size: 12px; }

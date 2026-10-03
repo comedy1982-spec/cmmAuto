@@ -137,5 +137,68 @@ const Indicators = (() => {
     return { macd: macdLine, signal, hist };
   }
 
-  return { sma, ema, ma, envelope, bollinger, rsi, macd };
+  /* ----- 자동 추세선 (피벗 연결) — app/trendline.py와 동일한 규칙 ----- */
+
+  const MAX_P2_CANDIDATES = 3;
+
+  function isPivot(bars, j, n, high) {
+    const key = high ? "high" : "low";
+    const v = bars[j][key];
+    for (let t = j - n; t <= j + n; t++) {
+      if (t === j) continue;
+      const w = bars[t][key];
+      if (high ? (t < j ? w >= v : w > v) : (t < j ? w <= v : w < v)) return false;
+    }
+    return true;
+  }
+
+  /** bars[0..end-1]을 마감 봉으로 보고 kind("res"|"sup") 추세선을 찾는다.
+   *  반환: { i1, p1, i2, p2, slope, value(end 봉에서의 선 가격) } 또는 null */
+  function findTrendline(bars, end, pivot, lookback, kind) {
+    const isRes = kind === "res";
+    const key = isRes ? "high" : "low";
+    const start = Math.max(pivot, end - lookback);
+    const piv = [];
+    for (let j = end - 1 - pivot; j >= start; j--) {
+      if (isPivot(bars, j, pivot, isRes)) piv.push(j);
+    }
+    for (let a = 0; a < Math.min(MAX_P2_CANDIDATES, piv.length); a++) {
+      const j2 = piv[a];
+      const p2 = bars[j2][key];
+      for (let b = a + 1; b < piv.length; b++) {
+        const j1 = piv[b];
+        const p1 = bars[j1][key];
+        if (isRes ? !(p1 > p2) : !(p1 < p2)) continue;
+        const slope = (p2 - p1) / (j2 - j1);
+        let ok = true;
+        for (let k = j1 + 1; k < end; k++) {
+          if (k === j2) continue;
+          const lv = p1 + slope * (k - j1);
+          const bar = bars[k];
+          const x = k < j2
+            ? (isRes ? Math.max(bar.open, bar.close) : Math.min(bar.open, bar.close))
+            : bar.close;
+          if (isRes ? x > lv : x < lv) { ok = false; break; }
+        }
+        if (!ok) continue;
+        const value = p1 + slope * (end - j1);
+        if (value <= 0) continue;
+        return { i1: j1, p1, i2: j2, p2, slope, value };
+      }
+    }
+    return null;
+  }
+
+  /** index 봉에서 추세선 돌파 여부. 마지막 봉은 진행 중 종가로 판정 */
+  function trendlineBreakAt(bars, index, pivot, lookback) {
+    const out = [];
+    const c = bars[index].close;
+    const r = findTrendline(bars, index, pivot, lookback, "res");
+    if (r && c > r.value) out.push({ index, side: "up", line: r });
+    const s = findTrendline(bars, index, pivot, lookback, "sup");
+    if (s && c < s.value) out.push({ index, side: "down", line: s });
+    return out;
+  }
+
+  return { sma, ema, ma, envelope, bollinger, rsi, macd, findTrendline, trendlineBreakAt };
 })();
